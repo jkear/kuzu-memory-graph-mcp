@@ -17,3 +17,5 @@ wheels/
 DBMS/docs/*.md
 DBMS/docs/*.py
 *.wal
+# Exclude DBMS documentation
+DBMS/docs/
