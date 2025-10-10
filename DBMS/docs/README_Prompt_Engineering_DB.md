@@ -2,215 +2,349 @@
 
 ## Overview
 
-This database contains the first extracted domain from the Neo4j knowledge graph: **Prompt Engineering Research**. It's a comprehensive knowledge base for prompt engineering techniques, based on The Prompt Report systematic survey, implemented in KuzuDB with vector similarity search capabilities.
+This database contains prompt engineering techniques and methods for working with Large Language Models (LLMs). It's accessible through the **Kuzu Memory Graph MCP Server** and uses a unified Entity model for consistency across all databases.
 
-## 🎯 Domain Summary
+## 🎯 Database Purpose
 
-**Prompt Engineering Research** is the root community containing:
-- 6 major subcommunities covering different technique categories
-- Query templates and documentation resources
-- Support for 58 distinct text-based prompting methods
-- Hierarchical organization with semantic search capabilities
+Store and explore prompt engineering knowledge including:
 
-## 📁 Files Generated
+- Prompting techniques (Chain-of-Thought, Few-Shot, Zero-Shot, etc.)
+- Use cases and applications
+- Best practices and principles
+- Relationships between techniques
 
-### Core Database Files
-- `prompt_engineering.kuzu` - Main KuzuDB database file
-- `prompt_engineering_schema.md` - Comprehensive schema documentation
-- `prompt_engineering_schema.cypher` - DDL statements for schema creation
+## 🏗️ Schema (Unified Entity Model)
 
-### Data Ingestion Scripts
-- `create_prompt_engineering_db.py` - Database creation and data ingestion
-- `demo_queries.py` - Working demonstration queries
-- `sample_queries.py` - Advanced query examples (some KuzuDB syntax limitations)
+### Entity Node
 
-### Documentation
-- `README_Prompt_Engineering_DB.md` - This file
-- `test_schema.py` - Schema validation script
-
-## 🏗️ Database Structure
-
-### Node Tables
-
-#### Community
 ```cypher
-identifier STRING PRIMARY KEY,
-type STRING,
-observations STRING[],
-created_date DATE DEFAULT current_date(),
-embedding FLOAT[384]  // For semantic search
+CREATE NODE TABLE IF NOT EXISTS Entity (
+    name STRING PRIMARY KEY,
+    type STRING,
+    observations STRING[],
+    embedding FLOAT[384],
+    created_date DATE DEFAULT current_date(),
+    updated_date DATE DEFAULT current_date()
+)
 ```
 
-**Communities (8 total):**
-- **Prompt Engineering Research** (Root)
-- **Text-Based Techniques** (58 methods, 6 categories)
-- **Multilingual Techniques** (Cross-language methods)
-- **Multimodal Techniques** (Vision/audio/text)
-- **Agent Techniques** (Multi-agent systems)
-- **Evaluation Methods** (Assessment techniques)
-- **Security and Alignment** (Safety methods)
-- **Query Templates** (Documentation)
+**Entity Types in this database**:
 
-#### Technique
+- `technique`: Specific prompting methods
+- `use_case`: Application scenarios
+- `principle`: General guidelines
+- `category`: Technique categories
+
+### Relationship
+
 ```cypher
-name STRING PRIMARY KEY,
-description STRING,
-category STRING,
-observations STRING[],
-embedding FLOAT[384]
+CREATE REL TABLE IF NOT EXISTS RELATED_TO (
+    FROM Entity TO Entity,
+    relationship_type STRING,
+    confidence FLOAT DEFAULT 1.0,
+    created_date DATE DEFAULT current_date()
+)
 ```
 
-#### UseCase
-```cypher
-name STRING PRIMARY KEY,
-description STRING,
-domain STRING,
-embedding FLOAT[384]
+**Relationship Types**:
+
+- `BEST_FOR`: Technique → Use Case
+- `COMBINES_WITH`: Technique → Technique
+- `CATEGORY_OF`: Category → Technique
+- `RELATED_TO`: General relationships
+
+## 🚀 Quick Start with MCP Server
+
+### 1. Access via Claude Desktop
+
+The database is available through the MCP server. See [MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md) for setup.
+
+### 2. List Available Databases
+
+```
+Query Resource: kuzu://databases/list
 ```
 
-### Relationship Tables
+This shows `prompt_engineering` along with other available databases.
 
-#### SUBCOMMUNITY
-- **Community → Community** (MANY_ONE)
-- Hierarchical relationships between communities
+### 3. Create Entities
 
-#### CONTAINS
-- **Community → Technique**
-- Links communities to their techniques
-
-#### BEST_FOR
-- **Technique → UseCase**
-- Connects techniques to optimal use cases
-
-## 🚀 Quick Start
-
-### 1. Create Database
-```bash
-# Activate virtual environment
-source .venv/bin/activate
-
-# Create database with sample data
-python create_prompt_engineering_db.py
+```json
+{
+  "tool": "create_entity",
+  "parameters": {
+    "database": "prompt_engineering",
+    "name": "Chain-of-Thought",
+    "entity_type": "technique",
+    "observations": [
+      "Prompting technique that encourages LLMs to show reasoning steps",
+      "Improves performance on complex reasoning tasks",
+      "Introduced in 'Chain-of-Thought Prompting' paper (2022)"
+    ]
+  }
+}
 ```
 
-### 2. Run Demo
-```bash
-# See database in action
-python demo_queries.py
+### 4. Search Techniques
+
+**Text Search**:
+
+```json
+{
+  "tool": "search_entities",
+  "parameters": {
+    "database": "prompt_engineering",
+    "query": "reasoning",
+    "limit": 10
+  }
+}
 ```
 
-### 3. Interactive Queries
-```python
-import kuzu
+**Semantic Search**:
 
-# Connect to database
-db = kuzu.Database("./prompt_engineering.kuzu")
-conn = kuzu.Connection(db)
-
-# Explore communities
-result = conn.execute("MATCH (c:Community) RETURN c.identifier, c.type")
-while result.has_next():
-    row = result.get_next()
-    print(f"{row[0]} ({row[1]})")
+```json
+{
+  "tool": "semantic_search",
+  "parameters": {
+    "database": "prompt_engineering",
+    "query": "techniques for improving mathematical problem solving",
+    "limit": 5,
+    "threshold": 0.6
+  }
+}
 ```
 
-## 🧠 Vector Search Capabilities
+## 📚 Common Use Cases
 
-### MLX Integration (Apple Silicon)
-The database is optimized for Apple Silicon with MLX embeddings:
+### 1. Exploring Techniques by Category
 
-```python
-# Install MLX for embeddings
-pip install mlx-embeddings
-
-# Load 4-bit quantized model
-from mlx_embeddings.utils import load
-model_name = "mlx-community/all-MiniLM-L6-v2-4bit"
-model, tokenizer = load(model_name)
-
-# Generate 384-dimensional embeddings
-def get_embedding(text):
-    inputs = tokenizer.encode(text, return_tensors="mlx")
-    outputs = model(inputs)
-    return outputs.text_embeds.tolist()
+```json
+{
+  "tool": "search_entities",
+  "parameters": {
+    "database": "prompt_engineering",
+    "query": "chain",
+    "limit": 10
+  }
+}
 ```
 
-### Semantic Search Example
-```cypher
--- Find similar communities
-MATCH (c:Community)
-WHERE c.embedding IS NOT NULL
-WITH c, array_cosine_similarity(c.embedding, $query_embedding) as similarity
-RETURN c.identifier, similarity
-ORDER BY similarity DESC
-LIMIT 5;
+Returns entities with "chain" in name/observations (Chain-of-Thought, etc.)
+
+### 2. Finding Related Techniques
+
+```json
+{
+  "tool": "get_related_entities",
+  "parameters": {
+    "database": "prompt_engineering",
+    "entity_name": "Few-Shot Learning",
+    "max_depth": 2,
+    "limit": 20
+  }
+}
 ```
 
-## 📊 Sample Query Results
+Explores 2-hop relationships from Few-Shot Learning.
 
-The demo shows:
-- **8 communities** with hierarchical structure
-- **7 subcommunity relationships**
-- **Query templates** with 15 ready-to-use examples
-- **Text-based techniques** covering 58 methods
-- **Vector extension** ready for semantic search
+### 3. Discovering Similar Methods
 
-## 🔍 Key Features
+```json
+{
+  "tool": "semantic_search",
+  "parameters": {
+    "database": "prompt_engineering",
+    "query": "techniques that help with reasoning and problem decomposition",
+    "limit": 5,
+    "threshold": 0.5
+  }
+}
+```
 
-### Hierarchical Organization
-- Root community with 6 specialized subcommunities
-- Clear parent-child relationships with MANY_ONE constraints
-- Documentation nested under relevant communities
+Uses vector similarity to find conceptually related techniques.
 
-### Vector Similarity Search
-- 384-dimensional embeddings (MLX compatible)
-- Native KuzuDB vector functions
-- Apple Silicon optimized with MLX
+### 4. Getting Database Overview
 
-### Query Templates
-- Standardized Cypher queries for common operations
-- 15 ready-to-use examples for practitioners
-- Optimized patterns for technique discovery
+```json
+{
+  "tool": "get_graph_summary",
+  "parameters": {
+    "database": "prompt_engineering"
+  }
+}
+```
 
-### Extensible Design
-- Ready for Technique and UseCase population
-- Supports CONTAINS and BEST_FOR relationships
-- Prepared for semantic search implementation
+Returns statistics on entities and relationships.
 
-## 📈 Usage Statistics
+## 🎯 Example Entities to Create
 
-Based on the Neo4j extraction:
-- **2831 nodes scanned** in original database
-- **70 valuable nodes extracted** for this domain
-- **600 total observations** captured
-- **8 communities** with full hierarchy
-- **4 domain types** identified in full extraction
+### Core Techniques
+
+```json
+{
+  "name": "Zero-Shot",
+  "entity_type": "technique",
+  "observations": [
+    "Prompting without providing examples",
+    "Relies on model's pre-trained knowledge",
+    "Good baseline for many tasks"
+  ]
+}
+
+{
+  "name": "Few-Shot Learning",
+  "entity_type": "technique",
+  "observations": [
+    "Provides 1-5 examples in the prompt",
+    "Helps model understand task format",
+    "Effective for structured outputs"
+  ]
+}
+
+{
+  "name": "Chain-of-Thought",
+  "entity_type": "technique",
+  "observations": [
+    "Shows reasoning steps in examples",
+    "Improves complex reasoning tasks",
+    "Works best with larger models (>100B params)"
+  ]
+}
+
+{
+  "name": "Self-Consistency",
+  "entity_type": "technique",
+  "observations": [
+    "Generate multiple reasoning paths",
+    "Select most consistent answer via voting",
+    "Improves reliability on reasoning tasks"
+  ]
+}
+
+{
+  "name": "ReAct",
+  "entity_type": "technique",
+  "observations": [
+    "Combines reasoning and acting",
+    "Alternates between thought and action",
+    "Useful for tool-using agents"
+  ]
+}
+```
+
+### Use Cases
+
+```json
+{
+  "name": "Mathematical Problem Solving",
+  "entity_type": "use_case",
+  "observations": [
+    "Solving math word problems",
+    "Requires step-by-step reasoning",
+    "Benefits from Chain-of-Thought"
+  ]
+}
+
+{
+  "name": "Code Generation",
+  "entity_type": "use_case",
+  "observations": [
+    "Generating code from descriptions",
+    "Requires clear specification",
+    "Benefits from few-shot examples"
+  ]
+}
+
+{
+  "name": "Question Answering",
+  "entity_type": "use_case",
+  "observations": [
+    "Answering factual questions",
+    "May require retrieval augmentation",
+    "Zero-shot often sufficient"
+  ]
+}
+```
+
+### Relationships
+
+```json
+// Chain-of-Thought best for Math
+{
+  "from_entity": "Chain-of-Thought",
+  "to_entity": "Mathematical Problem Solving",
+  "relationship_type": "BEST_FOR",
+  "confidence": 0.95
+}
+
+// Few-Shot best for Code
+{
+  "from_entity": "Few-Shot Learning",
+  "to_entity": "Code Generation",
+  "relationship_type": "BEST_FOR",
+  "confidence": 0.90
+}
+
+// Self-Consistency builds on Chain-of-Thought
+{
+  "from_entity": "Self-Consistency",
+  "to_entity": "Chain-of-Thought",
+  "relationship_type": "BUILDS_ON",
+  "confidence": 1.0
+}
+```
+
+## 📊 Current Database State
+
+The database is ready for population via MCP tools. Initial structure includes:
+
+- **Schema**: Unified Entity model with vector embeddings
+- **Vector Extension**: Loaded for semantic search
+- **Vector Index**: `entity_embedding_idx` on embeddings
+- **MLX Model**: 384-dimensional embeddings (Apple Silicon optimized)
 
 ## 🔄 Migration from Neo4j
 
-### Key Differences Handled
-- **Array syntax**: `STRING[]` vs Neo4j lists
-- **Vector extension**: Native `FLOAT[384]` support
-- **Multiplicity constraints**: `MANY_ONE` relationships
-- **Index creation**: Different syntax from Neo4j
-- **Query limitations**: Some Cypher features not supported
+For migrating existing Neo4j data, see:
 
-### Safe DDL Patterns
-- `IF NOT EXISTS` prevents re-run errors
-- Parameterized queries for data safety
-- Batch processing for large datasets
+- [Neo4j to MCP Migration Guide](./neo4j_to_mcp_migration.md)
+- [MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)
 
-## 🛠️ Development Notes
+The key transformation is mapping Neo4j schema to the unified Entity model:
 
-### Tested Features
-✅ Database creation and schema
-✅ Community data ingestion
-✅ Hierarchy relationships
-✅ Basic Cypher queries
-✅ Vector extension loading
-✅ Demo functionality
+```
+Neo4j → MCP Entity Model
+├── Community → Entity (type: "category")
+├── Technique → Entity (type: "technique")
+├── UseCase → Entity (type: "use_case")
+├── SUBCOMMUNITY → RELATED_TO (relationship_type: "SUBCOMMUNITY")
+├── CONTAINS → RELATED_TO (relationship_type: "CONTAINS")
+└── BEST_FOR → RELATED_TO (relationship_type: "BEST_FOR")
+```
+
+## 📚 Additional Resources
+
+- **[MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)**: Complete MCP server documentation
+- **[Schema Documentation](./prompt_engineering_schema.md)**: Detailed schema reference
+- **[Neo4j Migration Guide](./neo4j_to_mcp_migration.md)**: Step-by-step migration instructions
+
+## 🚀 Next Steps
+
+1. **Start MCP Server**: Configure Claude Desktop with server
+2. **Query Database List**: Use `kuzu://databases/list` resource
+3. **Create Core Techniques**: Use `create_entity` for fundamental methods
+4. **Build Relationships**: Link techniques to use cases
+5. **Semantic Search**: Test vector similarity on populated data
+
+---
+
+**Database**: `prompt_engineering.kuzu`  
+**Location**: `/DBMS/prompt_engineering.kuzu`  
+**Schema Version**: 1.0 (Unified Entity Model)  
+**Last Updated**: 2025-10-10
 
 ### Known Limitations
+
 ⚠️ Some advanced Cypher features not supported
 ⚠️ ORDER BY on nodes requires client-side sorting
 ⚠️ Path variable syntax limitations

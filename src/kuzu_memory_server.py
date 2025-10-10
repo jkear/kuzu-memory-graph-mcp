@@ -27,9 +27,10 @@ class AppContext:
     conn: kuzu.Connection
     embedding_model: Any
     tokenizer: Any
-    primary_db_path: str  # NEW
-    attached_databases: dict[str, str]  # NEW: {name: path}
-    databases_dir: str  # NEW
+    primary_db_path: str
+    primary_db_name: str  # BUGFIX: Store primary database name to avoid USE on it
+    attached_databases: dict[str, str]  # {name: path}
+    databases_dir: str
 
 
 def generate_embedding(model: Any, tokenizer: Any, text: str) -> list[float]:
@@ -133,8 +134,18 @@ def ensure_database_attached(
         return False, f"Failed to attach: {error_msg}"
 
 
-def switch_database_context(conn: kuzu.Connection, db_name: str) -> tuple[bool, str]:
-    """Switch active database using USE statement."""
+def switch_database_context(
+    conn: kuzu.Connection, db_name: str, primary_db_name: str
+) -> tuple[bool, str]:
+    """Switch active database using USE statement.
+
+    BUGFIX: Skip USE statement for primary database since it's already active.
+    The primary database cannot be accessed via USE - it's the default active database.
+    """
+    # BUGFIX: Don't try to USE the primary database - it's already active!
+    if db_name == primary_db_name:
+        return True, f"Using primary database '{db_name}' (already active)"
+
     try:
         conn.execute(f"USE {db_name};")
         return True, f"Switched to '{db_name}'"
@@ -217,7 +228,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         from mlx_embeddings.utils import load
 
         embedding_model, tokenizer = load("mlx-community/all-MiniLM-L6-v2-4bit")
-        print(f"MLX model loaded successfully (dimension: 384)", file=sys.stderr)
+        print("MLX model loaded successfully (dimension: 384)", file=sys.stderr)
     except Exception as e:
         print(f"Failed to load MLX model: {e}", file=sys.stderr)
         # Fallback to sentence transformers
@@ -267,6 +278,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             embedding_model=embedding_model,
             tokenizer=tokenizer,
             primary_db_path=db_path,
+            primary_db_name=primary_db_name,  # BUGFIX: Pass primary database name
             attached_databases=attached_databases,
             databases_dir=databases_dir,
         )
@@ -344,6 +356,15 @@ async def create_entity(
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
 
+    # BUGFIX: Check if trying to write to non-primary database
+    if database != app_ctx.primary_db_name:
+        return {
+            "status": "error",
+            "message": f"Cannot write to '{database}' - only primary database '{app_ctx.primary_db_name}' is writable. Attached databases are read-only.",
+            "database": database,
+            "writable_database": app_ctx.primary_db_name,
+        }
+
     # Attach and switch to database
     success, msg = ensure_database_attached(
         conn, app_ctx.attached_databases, database, app_ctx.databases_dir
@@ -351,7 +372,8 @@ async def create_entity(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -425,6 +447,15 @@ async def create_relationship(
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
 
+    # BUGFIX: Check if trying to write to non-primary database
+    if database != app_ctx.primary_db_name:
+        return {
+            "status": "error",
+            "message": f"Cannot write to '{database}' - only primary database '{app_ctx.primary_db_name}' is writable. Attached databases are read-only.",
+            "database": database,
+            "writable_database": app_ctx.primary_db_name,
+        }
+
     # Attach and switch to database
     success, msg = ensure_database_attached(
         conn, app_ctx.attached_databases, database, app_ctx.databases_dir
@@ -432,7 +463,8 @@ async def create_relationship(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -491,6 +523,15 @@ async def add_observations(
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
 
+    # BUGFIX: Check if trying to write to non-primary database
+    if database != app_ctx.primary_db_name:
+        return {
+            "status": "error",
+            "message": f"Cannot write to '{database}' - only primary database '{app_ctx.primary_db_name}' is writable. Attached databases are read-only.",
+            "database": database,
+            "writable_database": app_ctx.primary_db_name,
+        }
+
     # Attach and switch to database
     success, msg = ensure_database_attached(
         conn, app_ctx.attached_databases, database, app_ctx.databases_dir
@@ -498,7 +539,8 @@ async def add_observations(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -580,7 +622,8 @@ async def search_entities(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -643,7 +686,8 @@ async def semantic_search(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -773,7 +817,8 @@ async def get_related_entities(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
@@ -839,7 +884,8 @@ async def get_graph_summary(
                 summaries[db_name] = {"error": "Could not attach"}
                 continue
 
-            success, _ = switch_database_context(conn, db_name)
+            # BUGFIX: Pass primary_db_name to switch function
+            success, _ = switch_database_context(conn, db_name, app_ctx.primary_db_name)
             if not success:
                 summaries[db_name] = {"error": "Could not switch"}
                 continue
@@ -872,7 +918,8 @@ async def get_graph_summary(
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
-    success, msg = switch_database_context(conn, database)
+    # BUGFIX: Pass primary_db_name to switch function
+    success, msg = switch_database_context(conn, database, app_ctx.primary_db_name)
     if not success:
         return {"status": "error", "message": msg, "database": database}
 
