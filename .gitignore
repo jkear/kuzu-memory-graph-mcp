@@ -13,4 +13,7 @@ wheels/
 *.kuzu
 .docs
 .archived
-/DBMS/*
+./DBMS/docs/*
+DBMS/docs/*.md
+DBMS/docs/*.py
+*.wal
