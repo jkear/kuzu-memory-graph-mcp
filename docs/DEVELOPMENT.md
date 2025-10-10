@@ -22,13 +22,13 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
 │              MCP Protocol Layer         │
 │         (FastMCP Server Implementation) │
 ├─────────────────────────────────────────┤
-│        Main Server Implementation        │
+│        Main Server Implementation       │
 │     (src/kuzu_memory_server.py)         │
 │   - Tool Definitions & Handlers         │
-│   - Database Management                  │
+│   - Database Management                 │
 │   - Embedding Generation (MLX/ST)       │
 ├─────────────────────────────────────────┤
-│          Semantic Search Module          │
+│          Semantic Search Module         │
 │      (src/semantic_search.py)           │
 │   - Fallback Embedding Provider         │
 │   - Vector Similarity Computation       │
@@ -70,7 +70,7 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kuzu-memory-graph-mcp.git
+git clone https://github.com/jkear/kuzu-memory-graph-mcp.git
 cd kuzu-memory-graph-mcp
 
 # Install dependencies including development tools

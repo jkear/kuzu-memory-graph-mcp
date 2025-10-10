@@ -25,6 +25,9 @@ class AppContext:
     conn: kuzu.Connection
     embedding_model: Any
     tokenizer: Any
+    primary_db_path: str                    # NEW
+    attached_databases: dict[str, str]      # NEW: {name: path}
+    databases_dir: str                      # NEW
 
 
 def generate_embedding(model: Any, tokenizer: Any, text: str) -> list[float]:
@@ -76,17 +79,91 @@ def batch_generate_embeddings(model: Any, tokenizer: Any, texts: list[str]) -> l
     return result
 
 
+def discover_databases(databases_dir: str) -> dict[str, dict[str, str]]:
+    """Discover all Kuzu databases in directory."""
+    import glob
+    from pathlib import Path
+    
+    pattern = os.path.join(databases_dir, "*.kuzu")
+    db_paths = glob.glob(pattern)
+    
+    databases = {}
+    for db_path in db_paths:
+        path_obj = Path(db_path)
+        db_name = path_obj.stem
+        
+        databases[db_name] = {
+            "path": db_path,
+            "name": db_name,
+            "description": f"Database: {db_name}"
+        }
+    
+    return databases
+
+
+def ensure_database_attached(
+    conn: kuzu.Connection,
+    attached_databases: dict[str, str],
+    db_name: str,
+    databases_dir: str
+) -> tuple[bool, str]:
+    """Attach database if not already attached."""
+    if db_name in attached_databases:
+        return True, f"Database '{db_name}' already attached"
+    
+    db_path = os.path.join(databases_dir, f"{db_name}.kuzu")
+    
+    if not os.path.exists(db_path):
+        return False, f"Database file not found: {db_path}"
+    
+    try:
+        conn.execute(f"ATTACH '{db_path}' AS {db_name} (dbtype kuzu);")
+        attached_databases[db_name] = db_path
+        print(f"✓ Attached database: {db_name}")
+        return True, f"Successfully attached '{db_name}'"
+    except Exception as e:
+        error_msg = str(e)
+        if "already attached" in error_msg.lower() or "already exists" in error_msg.lower():
+            attached_databases[db_name] = db_path
+            return True, f"Database '{db_name}' already attached"
+        return False, f"Failed to attach: {error_msg}"
+
+
+def switch_database_context(conn: kuzu.Connection, db_name: str) -> tuple[bool, str]:
+    """Switch active database using USE statement."""
+    try:
+        conn.execute(f"USE {db_name};")
+        return True, f"Switched to '{db_name}'"
+    except Exception as e:
+        return False, f"Failed to switch: {str(e)}"
+
+
+def get_primary_db_name(db_path: str) -> str:
+    """Extract database name from path."""
+    from pathlib import Path
+    return Path(db_path).stem
+
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage application lifecycle with database and model initialization."""
-    # Get database path from environment
-    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './memory.kuzu')
-
-    print(f"Initializing Kuzu database at: {db_path}")
-
-    # Initialize Kuzu database
+    # Get primary database path from environment
+    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './DBMS/memory.kuzu')
+    databases_dir = os.getenv('KUZU_DATABASES_DIR', './DBMS')
+    
+    print(f"Initializing primary database: {db_path}")
+    print(f"Scanning for databases in: {databases_dir}")
+    
+    # Initialize primary Kuzu database
     db = kuzu.Database(db_path)
     conn = kuzu.Connection(db)
+    
+    attached_databases = {}
+    primary_db_name = get_primary_db_name(db_path)
+    attached_databases[primary_db_name] = db_path
+    
+    discovered_dbs = discover_databases(databases_dir)
+    print(f"Discovered {len(discovered_dbs)} database(s): {list(discovered_dbs.keys())}")
 
     # Install vector extension
     try:
@@ -168,8 +245,26 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         globals()['batch_generate_embeddings'] = lambda model, tokenizer, texts: fallback_batch_generate_embeddings(texts)
 
     try:
-        yield AppContext(db=db, conn=conn, embedding_model=embedding_model, tokenizer=tokenizer)
+        yield AppContext(
+            db=db,
+            conn=conn,
+            embedding_model=embedding_model,
+            tokenizer=tokenizer,
+            primary_db_path=db_path,
+            attached_databases=attached_databases,
+            databases_dir=databases_dir
+        )
     finally:
+        # Detach databases before closing
+        primary_name = get_primary_db_name(db_path)
+        for db_name in list(attached_databases.keys()):
+            if db_name != primary_name:
+                try:
+                    conn.execute(f"DETACH {db_name};")
+                    print(f"Detached: {db_name}")
+                except Exception as e:
+                    print(f"Warning: Could not detach {db_name}: {e}")
+        
         conn.close()
         db.close()
         print("Database connections closed")
@@ -179,11 +274,41 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 mcp = FastMCP("kuzu-memory-graph", lifespan=app_lifespan)
 
 
+# === MCP Resources ===
+
+@mcp.resource("kuzu://databases/list")
+async def list_databases(ctx: Context[ServerSession, AppContext]) -> str:
+    """List all available Kuzu databases."""
+    app_ctx = ctx.request_context.lifespan_context
+    
+    databases = discover_databases(app_ctx.databases_dir)
+    primary_name = get_primary_db_name(app_ctx.primary_db_path)
+    
+    db_list = []
+    for name, info in databases.items():
+        db_list.append({
+            "name": name,
+            "description": info["description"],
+            "is_primary": name == primary_name,
+            "is_attached": name in app_ctx.attached_databases
+        })
+    
+    db_list.sort(key=lambda x: (not x["is_primary"], x["name"]))
+    
+    import json
+    return json.dumps({
+        "databases": db_list,
+        "count": len(db_list),
+        "primary_database": primary_name
+    }, indent=2)
+
+
 # === MCP Tools ===
 
 @mcp.tool()
 async def create_entity(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     name: str,
     entity_type: str,
     observations: Optional[list[str]] = None
@@ -191,12 +316,24 @@ async def create_entity(
     """Create a new entity in the knowledge graph.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         name: Unique name for the entity
         entity_type: Type/category of the entity (person, concept, document, etc.)
         observations: List of observations/facts about the entity
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     # Prepare text for embedding
     text_to_embed = ' '.join(observations or [name])
@@ -224,6 +361,7 @@ async def create_entity(
 
         return {
             "status": "created",
+            "database": database,
             "name": name,
             "type": entity_type,
             "observations_count": len(observations or []),
@@ -233,6 +371,7 @@ async def create_entity(
         if "duplicate" in str(e).lower():
             return {
                 "status": "exists",
+                "database": database,
                 "name": name,
                 "type": entity_type,
                 "message": "Entity already exists"
@@ -243,6 +382,7 @@ async def create_entity(
 @mcp.tool()
 async def create_relationship(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     from_entity: str,
     to_entity: str,
     relationship_type: str,
@@ -251,6 +391,7 @@ async def create_relationship(
     """Create a relationship between two entities.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         from_entity: Name of the source entity
         to_entity: Name of the target entity
         relationship_type: Type of relationship (WORKS_WITH, KNOWS, RELATED_TO, etc.)
@@ -258,6 +399,17 @@ async def create_relationship(
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     try:
         result = conn.execute("""
@@ -278,6 +430,7 @@ async def create_relationship(
 
         return {
             "status": "created",
+            "database": database,
             "from": from_entity,
             "to": to_entity,
             "relationship_type": relationship_type,
@@ -287,6 +440,7 @@ async def create_relationship(
         if "does not exist" in str(e).lower():
             return {
                 "status": "error",
+                "database": database,
                 "message": f"One or both entities not found: {from_entity}, {to_entity}"
             }
         raise e
@@ -295,17 +449,30 @@ async def create_relationship(
 @mcp.tool()
 async def add_observations(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     entity_name: str,
     observations: list[str]
 ) -> dict[str, Any]:
     """Add new observations to an existing entity.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         entity_name: Name of the entity to update
         observations: List of new observations to add
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     # Get current entity
     result = conn.execute("""
@@ -316,6 +483,7 @@ async def add_observations(
     if not result.has_next():  # type: ignore
         return {
             "status": "error",
+            "database": database,
             "message": f"Entity '{entity_name}' not found"
         }
 
@@ -328,6 +496,7 @@ async def add_observations(
     if not new_obs:
         return {
             "status": "no_change",
+            "database": database,
             "entity_name": entity_name,
             "message": "All observations already exist"
         }
@@ -350,6 +519,7 @@ async def add_observations(
 
     return {
         "status": "updated",
+        "database": database,
         "entity_name": entity_name,
         "added_observations": new_obs,
         "total_observations": len(updated_obs),
@@ -360,17 +530,30 @@ async def add_observations(
 @mcp.tool()
 async def search_entities(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     query: str,
     limit: int = 10
 ) -> dict[str, Any]:
     """Search entities using text-based search.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         query: Search query string
         limit: Maximum number of results
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     result = conn.execute("""
         MATCH (e:Entity)
@@ -397,6 +580,7 @@ async def search_entities(
 
     return {
         "query": query,
+        "database": database,
         "entities": entities,
         "count": len(entities)
     }
@@ -405,6 +589,7 @@ async def search_entities(
 @mcp.tool()
 async def semantic_search(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     query: str,
     limit: int = 10,
     threshold: float = 0.3
@@ -412,12 +597,24 @@ async def semantic_search(
     """Search entities using semantic similarity.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         query: Search query for semantic matching
         limit: Maximum number of results
         threshold: Minimum similarity threshold (0.0-1.0)
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     # Generate query embedding
     query_embedding = generate_embedding(app_ctx.embedding_model, app_ctx.tokenizer, query)
@@ -478,6 +675,7 @@ async def semantic_search(
 
         return {
             "query": query,
+            "database": database,
             "entities": similarities,
             "count": len(similarities),
             "threshold": threshold,
@@ -496,6 +694,7 @@ async def semantic_search(
 
     return {
         "query": query,
+        "database": database,
         "entities": entities,
         "count": len(entities),
         "threshold": threshold,
@@ -506,6 +705,7 @@ async def semantic_search(
 @mcp.tool()
 async def get_related_entities(
     ctx: Context[ServerSession, AppContext],
+    database: str,
     entity_name: str,
     max_depth: int = 2,
     limit: int = 20
@@ -513,20 +713,32 @@ async def get_related_entities(
     """Get entities related to the specified entity through relationship traversal.
 
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         entity_name: Name of the entity to find relations for
         max_depth: Maximum relationship depth to traverse
         limit: Maximum number of results
     """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     result = conn.execute(f"""
         MATCH path = (start:Entity {{name: $name}})-[:RELATED_TO*1..{max_depth}]-(related:Entity)
         WHERE related.name <> $name
         RETURN DISTINCT related.name, related.type, related.observations,
-               length(path) as distance,
-               [r IN relationships(path) | r.relationship_type] as relationship_path,
-               [r IN relationships(path) | r.confidence] as confidence_path
+                length(path) as distance,
+                [r IN relationships(path) | r.relationship_type] as relationship_path,
+                [r IN relationships(path) | r.confidence] as confidence_path
         ORDER BY distance, related.name
         LIMIT $limit
     """, {
@@ -548,6 +760,7 @@ async def get_related_entities(
 
     return {
         "entity_name": entity_name,
+        "database": database,
         "entities": entities,
         "count": len(entities),
         "max_depth": max_depth
@@ -556,11 +769,62 @@ async def get_related_entities(
 
 @mcp.tool()
 async def get_graph_summary(
-    ctx: Context[ServerSession, AppContext]
+    ctx: Context[ServerSession, AppContext],
+    database: Optional[str] = None
 ) -> dict[str, Any]:
-    """Get a summary of the entire knowledge graph."""
+    """Get a summary of the knowledge graph(s).
+    
+    Args:
+        database: Specific database to summarize, or None for all databases
+    """
     app_ctx = ctx.request_context.lifespan_context
     conn = app_ctx.conn
+    
+    # If no database specified, summarize all discovered databases
+    if database is None:
+        discovered_dbs = discover_databases(app_ctx.databases_dir)
+        summaries = {}
+        
+        for db_name in discovered_dbs.keys():
+            success, _ = ensure_database_attached(
+                conn, app_ctx.attached_databases, db_name, app_ctx.databases_dir
+            )
+            if not success:
+                summaries[db_name] = {"error": "Could not attach"}
+                continue
+                
+            success, _ = switch_database_context(conn, db_name)
+            if not success:
+                summaries[db_name] = {"error": "Could not switch"}
+                continue
+            
+            try:
+                entity_count = conn.execute("MATCH (e:Entity) RETURN COUNT(e)").get_next()[0]  # type: ignore
+                relation_count = conn.execute("MATCH ()-[r]->() RETURN COUNT(r)").get_next()[0]  # type: ignore
+                
+                summaries[db_name] = {
+                    "entities": entity_count,
+                    "relationships": relation_count
+                }
+            except Exception as e:
+                summaries[db_name] = {"error": str(e)}
+        
+        return {
+            "scope": "all_databases",
+            "databases": summaries,
+            "total_databases": len(discovered_dbs)
+        }
+    
+    # If database specified, provide detailed summary
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
 
     # Get counts
     entity_count = conn.execute("MATCH (e:Entity) RETURN COUNT(e)").get_next()[0]  # type: ignore
@@ -591,6 +855,8 @@ async def get_graph_summary(
         relationship_types.append({"type": row[0], "count": row[1]})  # type: ignore
 
     return {
+        "scope": "single_database",
+        "database": database,
         "stats": {
             "entities": entity_count,
             "relationships": relation_count,

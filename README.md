@@ -4,9 +4,11 @@ A high-performance LLM memory server using Kuzu graph database with semantic sea
 
 ## 🌟 Features
 
+- **Multi-Database Support**: Work with multiple Kuzu databases simultaneously using native ATTACH feature
 - **Graph-based Memory Storage**: Uses KuzuDB for efficient relationship traversal and complex queries
 - **Semantic Search**: Vector-based similarity search using sentence transformers and MLX embeddings
 - **MCP Protocol**: Full Model Context Protocol implementation for AI assistant integration
+- **Database Discovery**: Automatic discovery of available databases via MCP Resources
 - **Hybrid Search**: Combines text-based and semantic search for comprehensive results
 - **Fast & Reliable**: Optimized for AI/agent memory use cases with Apple Silicon acceleration
 - **Flexible Entity Model**: Support for custom entity types and relationships
@@ -26,7 +28,7 @@ A high-performance LLM memory server using Kuzu graph database with semantic sea
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kuzu-memory-graph-mcp.git
+git clone https://github.com/jkear/kuzu-memory-graph-mcp.git
 cd kuzu-memory-graph-mcp
 
 # Install dependencies
@@ -40,7 +42,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kuzu-memory-graph-mcp.git
+git clone https://github.com/jkear/kuzu-memory-graph-mcp.git
 cd kuzu-memory-graph-mcp
 
 # Create virtual environment
@@ -54,11 +56,14 @@ pip install -e .
 ### Running the Server
 
 ```bash
-# Run as MCP server
+# Run using uv in development mode (recommended)
 uv run kuzu-memory-server
 
-# Or directly with Python. Again, you could but should you?
-python -m src.kuzu_memory_server
+# Or run directly with Python after activating the venv
+python -m kuzu_memory_server
+
+# Or use uvx for testing (installs from PyPI - for published package only)
+# uvx kuzu-memory-server
 ```
 
 ## ⚙️ Configuration
@@ -67,22 +72,48 @@ python -m src.kuzu_memory_server
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `KUZU_MEMORY_DB_PATH` | Database file path | `./memory.kuzu` |
+| `KUZU_MEMORY_DB_PATH` | Primary database file path | `./DBMS/memory.kuzu` |
+| `KUZU_DATABASES_DIR` | Directory containing all .kuzu databases | `./DBMS` |
 | `SEMANTIC_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
 | `EMBEDDING_CACHE_DIR` | Embedding cache directory | `./.embeddings_cache` |
 
 ### MCP Client Configuration
 
-Add to your MCP client configuration (e.g., Claude Desktop):
+Add to your MCP client configuration (e.g., Claude Desktop `~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+#### For Development (Local Project)
 
 ```json
 {
   "mcpServers": {
     "kuzu-memory": {
       "command": "uv",
-      "args": ["run", "kuzu-memory-server"],
+      "args": [
+        "--directory",
+        "/path/to/kuzu-memory-graph-mcp",
+        "run",
+        "kuzu-memory-server"
+      ],
       "env": {
-        "KUZU_MEMORY_DB_PATH": "/path/to/your/memory.kuzu"
+        "KUZU_MEMORY_DB_PATH": "/path/to/DBMS/memory.kuzu",
+        "KUZU_DATABASES_DIR": "/path/to/DBMS"
+      }
+    }
+  }
+}
+```
+
+#### For Production (Published Package)
+
+```json
+{
+  "mcpServers": {
+    "kuzu-memory": {
+      "command": "uvx",
+      "args": ["kuzu-memory-server"],
+      "env": {
+        "KUZU_MEMORY_DB_PATH": "/path/to/DBMS/memory.kuzu",
+        "KUZU_DATABASES_DIR": "/path/to/DBMS"
       }
     }
   }
@@ -91,29 +122,61 @@ Add to your MCP client configuration (e.g., Claude Desktop):
 
 ## 📚 Usage Examples
 
+### Multi-Database Setup
+
+Organize your databases in a dedicated directory:
+
+```bash
+/path/to/databases/
+├── memory.kuzu           # Primary database
+├── prompt_engineer.kuzu  # Prompts and patterns
+└── research_papers.kuzu  # Academic knowledge
+```
+
+### Database Discovery
+
+Query available databases via MCP Resource:
+
+```python
+# List all available databases
+resource_result = await access_resource("kuzu://databases/list")
+# Returns JSON with database metadata including primary/attached status
+```
+
 ### Creating Entities
 
 ```python
-# Create a person entity
+# Create a person entity in the 'memory' database
 create_entity(
+    database="memory",
     name="Jordan Kearfott",
     entity_type="person",
-    observations=["Software vibe-ineer", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python but improving"]
+    observations=["LLMvibe engngineer for sales and marketing", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python but improving"]
 )
 
-# Create a concept entity
+# Create a prompt pattern in the 'prompt_engineer' database
 create_entity(
-    name="Machine Learning",
-    entity_type="concept",
-    observations=["Subset of AI", "Uses statistical techniques", "Enables computers to learn"]
+    database="prompt_engineer",
+    name="Chain of Thought",
+    entity_type="prompt_pattern",
+    observations=["Improves reasoning", "Step-by-step thinking"]
+)
+
+# Create a research paper in the 'research_papers' database
+create_entity(
+    database="research_papers",
+    name="Attention Is All You Need",
+    entity_type="paper",
+    observations=["Transformer architecture", "Self-attention mechanism"]
 )
 ```
 
 ### Creating Relationships
 
 ```python
-# Create relationship between entities
+# Create relationship between entities in specific database
 create_relationship(
+    database="memory",
     from_entity="Sam Altman",
     to_entity="OpenAI",
     relationship_type="IS_CEO",
@@ -124,29 +187,49 @@ create_relationship(
 ### Searching Entities
 
 ```python
-# Text-based search
-search_entities(query="software engineer", limit=10)
+# Search in specific database
+search_entities(database="memory", query="software engineer", limit=10)
 
-# Semantic search
-semantic_search(query="AI programming", limit=10, threshold=0.3)
+# Semantic search across research papers
+semantic_search(database="research_papers", query="transformer architecture", limit=10, threshold=0.3)
 
-# Get related entities
-get_related_entities(entity_name="Alice Johnson", max_depth=2)
+# Get related entities in prompt database
+get_related_entities(database="prompt_engineer", entity_name="Chain of Thought", max_depth=2)
 ```
 
-## 🛠️ MCP Tools
+### Cross-Database Operations
 
-The server provides the following MCP tools:
+```python
+# Get overview of all databases
+summary = await get_graph_summary()  # No database param = all databases
+
+# Get detailed summary of specific database
+summary = await get_graph_summary(database="memory")
+```
+
+## 🛠️ MCP Tools & Resources
+
+The server provides the following MCP tools and resources:
+
+### Resources
+
+| Resource | Description |
+|----------|-------------|
+| `kuzu://databases/list` | List all available Kuzu databases with metadata |
+
+### Tools
 
 | Tool | Description |
 |------|-------------|
-| `create_entity` | Create new entities in the knowledge graph |
-| `create_relationship` | Create relationships between entities |
-| `add_observations` | Add observations to existing entities |
-| `search_entities` | Search entities using text-based queries |
-| `semantic_search` | Search entities using semantic similarity |
-| `get_related_entities` | Find entities related through relationships |
-| `get_graph_summary` | Get statistics about the knowledge graph |
+| `create_entity` | Create new entities in the specified knowledge graph |
+| `create_relationship` | Create relationships between entities in specified database |
+| `add_observations` | Add observations to existing entities in specified database |
+| `search_entities` | Search entities using text-based queries in specified database |
+| `semantic_search` | Search entities using semantic similarity in specified database |
+| `get_related_entities` | Find entities related through relationships in specified database |
+| `get_graph_summary` | Get statistics about specific database or all databases |
+
+All tools (except `get_graph_summary`) require a `database` parameter. Use the `kuzu://databases/list` resource to discover available databases.
 
 ## 🏗️ Architecture
 
@@ -187,17 +270,11 @@ pytest tests/
 1. Clone the repository
 2. Install with `uv sync --dev`
 3. Run tests with `python test_server.py`
-4. Start development server with `uv run kuzu-memory-server`
-
-See [DEVELOPER.md](DEVELOPER.md) for detailed development instructions.
+4. Start development server with `uvx run .` or `uvx run . kuzu-memory-server`
 
 ## 🚀 Deployment
 
 For production deployment considerations, see [DEPLOYMENT.md](DEPLOYMENT.md).
-
-## 🐛 Troubleshooting
-
-For common issues and solutions, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## 📚 Documentation
 
