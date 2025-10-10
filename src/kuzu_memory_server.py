@@ -295,7 +295,26 @@ def generate_embedding(model: Any, tokenizer: Any, text: str) -> list[float]:
 
     inputs = tokenizer.encode(text.strip(), return_tensors="mlx")
     outputs = model(inputs)
-    return outputs.text_embeds.tolist()
+
+    # Convert to list and flatten if needed
+    embedding = outputs.text_embeds.tolist()
+
+    # Flatten 2D array to 1D if necessary
+    if isinstance(embedding, list) and len(embedding) > 0 and isinstance(embedding[0], list):
+        embedding = embedding[0]  # Take first row if it's 2D
+
+    # Convert to float and ensure correct length
+    embedding = [float(x) for x in embedding]
+
+    # Ensure we have exactly 384 dimensions
+    if len(embedding) != 384:
+        # Pad or truncate to 384 dimensions
+        if len(embedding) > 384:
+            embedding = embedding[:384]
+        else:
+            embedding = embedding + [0.0] * (384 - len(embedding))
+
+    return embedding
 
 
 def batch_generate_embeddings(
@@ -320,13 +339,30 @@ def batch_generate_embeddings(
     )
     outputs = model(inputs["input_ids"], attention_mask=inputs["attention_mask"])
 
-    # Map results back to original order
+    # Map results back to original order with proper formatting
     embeddings = outputs.text_embeds.tolist()
     result = []
     valid_idx = 0
     for text in texts:
         if text and text.strip():
-            result.append(embeddings[valid_idx])
+            # Get the embedding and flatten if needed
+            embedding = embeddings[valid_idx]
+
+            # Flatten 2D array to 1D if necessary
+            if isinstance(embedding, list) and len(embedding) > 0 and isinstance(embedding[0], list):
+                embedding = embedding[0]  # Take first row if it's 2D
+
+            # Convert to float and ensure correct length
+            embedding = [float(x) for x in embedding]
+
+            # Ensure we have exactly 384 dimensions
+            if len(embedding) != 384:
+                if len(embedding) > 384:
+                    embedding = embedding[:384]
+                else:
+                    embedding = embedding + [0.0] * (384 - len(embedding))
+
+            result.append(embedding)
             valid_idx += 1
         else:
             result.append([0.0] * 384)
