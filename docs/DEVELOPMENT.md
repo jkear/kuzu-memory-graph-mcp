@@ -44,69 +44,85 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
 
 ## Multi-Database Architecture
 
-The server supports multiple Kuzu databases simultaneously using Kuzu's native `ATTACH DATABASE` feature:
+The server supports multiple Kuzu databases with dynamic primary (writable) database switching:
 
 ### Database Management Components
 
-1. **Database Discovery**
+1. **Writable Databases Configuration**
+   - `KUZU_WRITABLE_DATABASES`: Comma-separated list of databases that can be made primary
+   - Example: `"memory,prompt_engineering,research_papers"`
+   - Only configured databases can be made writable
+
+2. **Database Manager**
+   - `WritableDatabaseManager`: Global singleton managing database connections
+   - `initialize()`: Setup with list of writable databases
+   - `switch_to(db_name)`: Close current, open new primary database
+   - `get_connection()`: Get current writable connection
+   - `is_writable(db_name)`: Check if database is in writable list
+
+3. **Database Discovery**
    - `discover_databases()`: Scans directory for `.kuzu` files
    - Auto-detects available databases at startup
 
-2. **Database Attachment**
-   - `ensure_database_attached()`: Lazily attaches databases when first accessed
-   - Tracks attached databases in `AppContext.attached_databases`
+4. **Dynamic Switching**
+   - `switch_primary_database()`: MCP tool for AI to switch databases
+   - Schema and vector index automatically created on switch
+   - No server restart required
 
-3. **Context Switching**
-   - `switch_database_context()`: Switches active database using `USE` statement
-   - Each tool call switches to the specified database
-
-4. **Resource-Based Discovery**
+5. **Resource-Based Discovery**
    - `kuzu://databases/list` MCP Resource exposes available databases
-   - Returns JSON with database metadata including primary/attached status
+   - Returns JSON with database metadata including writable status
 
 ### Database Lifecycle
 
 ```graph
 Server Startup
     ↓
-Discover Databases (scan KUZU_DATABASES_DIR)
+Parse KUZU_WRITABLE_DATABASES Configuration
     ↓
-Open Primary Database (KUZU_MEMORY_DB_PATH)
+Initialize Database Manager
     ↓
-Initialize Schema & Vector Index
+Switch to Initial Primary Database
+    ↓
+Ensure Schema & Vector Index
     ↓
 Load MLX Embedding Model
     ↓
 Ready for Requests
     ↓
-Tool Call with Database Parameter
+Tool Call: switch_primary_database(database="prompt_engineering")
     ↓
-Ensure Database Attached (ATTACH if needed)
+Close Current Primary Connection
     ↓
-Switch Context (USE database)
+Open New Primary Database
     ↓
-Execute Query
+Ensure Schema & Vector Index
+    ↓
+Ready for Write Operations to New Database
+    ↓
+Tool Call: create_entity(database="prompt_engineering", ...)
+    ↓
+Execute Write Query on Current Primary
     ↓
 Return Result
     ↓
 Server Shutdown
     ↓
-Detach All Databases
-    ↓
-Close Connections
+Cleanup All Connections
 ```
 
 ### Environment Variables
 
-- `KUZU_MEMORY_DB_PATH`: Primary database file path (default: `./DBMS/memory.kuzu`)
+- `KUZU_MEMORY_DB_PATH`: Initial primary database file path (default: `./DBMS/memory.kuzu`)
 - `KUZU_DATABASES_DIR`: Directory containing all .kuzu databases (default: `./DBMS`)
+- `KUZU_WRITABLE_DATABASES`: Comma-separated list of writable databases (optional, enables multi-primary mode)
 
 ### Core Components
 
 1. **Main Server (`src/kuzu_memory_server.py`)**
    - FastMCP-based server implementation with all tools
-   - Multi-database connection and schema management
-   - Database discovery and attachment management
+   - Dynamic database switching via `WritableDatabaseManager`
+   - Database discovery and metadata management
    - Embedding generation with MLX (Apple Silicon) and Sentence Transformers fallback
    - Application lifecycle management
 
@@ -116,10 +132,10 @@ Close Connections
    - Embedding caching functionality
 
 3. **Database Layer**
-   - Multiple KuzuDB connection management
+   - `WritableDatabaseManager`: Global singleton for database lifecycle
+   - Dynamic connection management with proper cleanup
    - Schema initialization and vector index creation per database
    - Entity and relationship storage across databases
-   - Lazy database attachment and context switching
 
 ## Development Setup
 
@@ -217,53 +233,71 @@ from mcp.server.fastmcp import FastMCP, Context
 mcp = FastMCP("kuzu-memory-graph", lifespan=app_lifespan)
 
 @mcp.tool()
-async def create_entity(ctx: Context, name: str, entity_type: str, observations: list[str] = None):
+async def switch_primary_database(ctx: Context, database: str):
+    """Switch the active primary (writable) database."""
+    app_ctx = ctx.request_context.lifespan_context
+    success, msg = app_ctx.db_manager.switch_to(database)
+    return {
+        "success": success,
+        "message": msg,
+        "current_primary": app_ctx.db_manager.get_current_name()
+    }
+
+@mcp.tool()
+async def create_entity(ctx: Context, database: str, name: str, entity_type: str, observations: list[str] = None):
     """Create a new entity in the knowledge graph."""
+    app_ctx = ctx.request_context.lifespan_context
+    
+    # Check if target database is current primary
+    if database != app_ctx.db_manager.get_current_name():
+        if app_ctx.db_manager.is_writable(database):
+            return {"status": "error", "message": f"Use switch_primary_database(database='{database}') first"}
+        else:
+            return {"status": "error", "message": f"Database '{database}' is not writable"}
+    
+    conn = app_ctx.db_manager.get_connection()
     # Implementation...
 ```
 
 ### Application Lifecycle Management
 
-The server uses a context manager for resource management with multi-database support:
+The server uses a context manager for resource management with dynamic database switching:
 
 ```python
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage application lifecycle with database and model initialization."""
-    # Get primary database path and databases directory
-    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './DBMS/memory.kuzu')
+    # Parse writable databases configuration
+    writable_dbs_str = os.getenv('KUZU_WRITABLE_DATABASES', '')
+    writable_databases = [db.strip() for db in writable_dbs_str.split(',') if db.strip()]
+    
+    # Get databases directory
     databases_dir = os.getenv('KUZU_DATABASES_DIR', './DBMS')
     
-    # Initialize primary Kuzu database
-    db = kuzu.Database(db_path)
-    conn = kuzu.Connection(db)
+    # Load embedding models
+    embedding_model = load_embeddings()
+    tokenizer = load_tokenizer()
     
-    # Initialize attached databases tracker
-    attached_databases = {}
-    primary_db_name = get_primary_db_name(db_path)
-    attached_databases[primary_db_name] = db_path
+    # Initialize database manager
+    db_manager.initialize(writable_databases, databases_dir, embedding_model, tokenizer)
     
-    # Discover available databases
-    discovered_dbs = discover_databases(databases_dir)
+    # Switch to initial primary database
+    initial_db = writable_databases[0] if writable_databases else get_primary_db_name(db_path)
+    success, msg = db_manager.switch_to(initial_db)
     
-    # Schema creation, vector index, model loading...
+    if not success:
+        raise RuntimeError(f"Failed to initialize primary database: {msg}")
+    
     try:
         yield AppContext(
-            db=db,
-            conn=conn,
+            db_manager=db_manager,
             embedding_model=embedding_model,
             tokenizer=tokenizer,
-            primary_db_path=db_path,
-            attached_databases=attached_databases,
             databases_dir=databases_dir
         )
     finally:
-        # Detach databases before closing
-        for db_name in list(attached_databases.keys()):
-            if db_name != primary_name:
-                conn.execute(f"DETACH {db_name};")
-        conn.close()
-        db.close()
+        # Cleanup all connections
+        db_manager.cleanup()
 ```
 
 ### Embedding Generation
@@ -469,24 +503,24 @@ ruff check src/ tests/ --fix
 ### Adding New MCP Tools
 
 1. Define the tool function with proper type hints
-2. Add `database` parameter (first parameter after `ctx`)
+2. Add `database` parameter (first parameter after `ctx`) if the tool needs database access
 3. Add comprehensive docstring with parameter descriptions
-4. Implement database attachment and context switching
-5. Implement error handling
+4. Check if database is writable and is the current primary for write operations
+5. Implement error handling with helpful messages
 6. Add tests for the new tool
 7. Update API documentation
 
-Example:
+Example (Read Operation):
 
 ```python
 @mcp.tool()
-async def new_tool(
+async def new_read_tool(
     ctx: Context[ServerSession, AppContext],
-    database: str,  # Required: Database parameter
+    database: str,
     param1: str,
     param2: int = 10
 ) -> dict[str, Any]:
-    """New tool description.
+    """New read tool description.
     
     Args:
         database: Database name (query kuzu://databases/list to see available)
@@ -497,21 +531,55 @@ async def new_tool(
         Dictionary with tool results
     """
     app_ctx = ctx.request_context.lifespan_context
-    conn = app_ctx.conn
     
-    # Attach and switch to database
-    success, msg = ensure_database_attached(
-        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
-    )
-    if not success:
-        return {"status": "error", "message": msg, "database": database}
+    # Read operations can work with any discovered database
+    try:
+        # Implementation for reading data
+        return {"status": "success", "database": database, "result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "database": database}
+```
+
+Example (Write Operation):
+
+```python
+@mcp.tool()
+async def new_write_tool(
+    ctx: Context[ServerSession, AppContext],
+    database: str,
+    param1: str
+) -> dict[str, Any]:
+    """New write tool description.
     
-    success, msg = switch_database_context(conn, database)
-    if not success:
-        return {"status": "error", "message": msg, "database": database}
+    Args:
+        database: Database name (must be current primary)
+        param1: Description of parameter 1
+        
+    Returns:
+        Dictionary with tool results
+    """
+    app_ctx = ctx.request_context.lifespan_context
+    current_primary = app_ctx.db_manager.get_current_name()
+    
+    # Check if target database is the current primary
+    if database != current_primary:
+        if app_ctx.db_manager.is_writable(database):
+            return {
+                "status": "error",
+                "message": f"Use switch_primary_database(database='{database}') first",
+                "database": database
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Database '{database}' is not writable",
+                "database": database
+            }
+    
+    conn = app_ctx.db_manager.get_connection()
     
     try:
-        # Implementation
+        # Implementation for writing data
         return {"status": "success", "database": database, "result": result}
     except Exception as e:
         return {"status": "error", "message": str(e), "database": database}

@@ -40,7 +40,52 @@ The server has been simplified to use only two main files:
     - [Specific Error Cases](#specific-error-cases)
     - [Best Practices for Error Handling](#best-practices-for-error-handling)
 
-The knowledge graph uses the following schema:
+## Multi-Database Architecture
+
+The server supports multiple Kuzu databases with dynamic primary (writable) database switching.
+
+### Database Discovery
+
+The server automatically discovers all `.kuzu` database files in the configured `KUZU_DATABASES_DIR` directory at startup.
+
+### Database Management
+
+**Writable Databases Configuration**:
+
+- Set `KUZU_WRITABLE_DATABASES` environment variable with comma-separated database names
+- Example: `"memory,prompt_engineering,research_papers"`
+- Only configured databases can be made primary (writable)
+
+**Database Manager**:
+
+- `WritableDatabaseManager`: Manages connections to writable databases
+- `switch_to(db_name)`: Switch active primary database
+- `get_connection()`: Get current writable connection
+- `is_writable(db_name)`: Check if database is in writable list
+
+**Dynamic Switching**:
+
+- Use `switch_primary_database()` MCP tool to change active writable database
+- Schema and vector index are automatically created when switching
+- No server restart required
+
+### Example Database Structure
+
+```bash
+/path/to/databases/
+├── memory.kuzu           # Writable database
+├── prompt_engineer.kuzu  # Writable database  
+└── research_papers.kuzu  # Writable database
+```
+
+Configuration:
+
+```bash
+KUZU_WRITABLE_DATABASES="memory,prompt_engineer,research_papers"
+KUZU_DATABASES_DIR="/path/to/databases"
+```
+
+## Graph Schema
 
 ### Entity Node Table
 
@@ -125,6 +170,54 @@ databases = await access_resource("kuzu://databases/list")
 
 ## MCP Tools
 
+### switch_primary_database
+
+Switches the active primary (writable) database. Only databases listed in `KUZU_WRITABLE_DATABASES` can be made primary.
+
+**Parameters:**
+
+- `database` (string, required): Name of database to make primary (must be in writable databases list)
+
+**Returns:**
+
+```json
+{
+  "success": true,
+  "message": "Successfully switched to 'prompt_engineering' as primary (writable) database",
+  "previous_primary": "memory",
+  "current_primary": "prompt_engineering",
+  "writable_databases": ["memory", "prompt_engineering", "research_papers"],
+  "switched": true
+}
+```
+
+**Error Response (Database Not Writable):**
+
+```json
+{
+  "success": false,
+  "message": "Cannot switch to 'unknown_db': not in writable databases list",
+  "current_primary": "memory",
+  "writable_databases": ["memory", "prompt_engineering", "research_papers"],
+  "switched": false
+}
+```
+
+**Example Usage:**
+
+```python
+# Switch to prompt_engineering database
+result = await switch_primary_database(database="prompt_engineering")
+
+# Now create entities in prompt_engineering
+await create_entity(
+    database="prompt_engineering",
+    name="Chain of Thought",
+    entity_type="prompt_pattern",
+    observations=["Improves reasoning"]
+)
+```
+
 ### create_entity
 
 Creates a new entity in the specified knowledge graph with automatic embedding generation.
@@ -177,6 +270,8 @@ Creates a new entity in the specified knowledge graph with automatic embedding g
 }
 ```
 
+**Note**: This tool can only write to the current primary database. Use `switch_primary_database` to change which database is writable.
+
 ### create_relationship
 
 Creates a relationship between two existing entities in the specified database.
@@ -226,6 +321,8 @@ Creates a relationship between two existing entities in the specified database.
   "confidence": 0.9
 }
 ```
+
+**Note**: This tool can only write to the current primary database. Use `switch_primary_database` to change which database is writable.
 
 ### add_observations
 
@@ -278,6 +375,8 @@ Adds new observations to an existing entity in the specified database and update
   "reembedded": true
 }
 ```
+
+**Note**: This tool can only write to the current primary database. Use `switch_primary_database` to change which database is writable.
 
 ### search_entities
 

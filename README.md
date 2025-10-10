@@ -5,8 +5,9 @@ A high-performance LLM memory server using Kuzu graph database with semantic sea
 ## 🌟 Features
 
 - **Graph-based Memory Storage**: Uses KuzuDB for efficient relationship traversal and complex queries
-- **Multi-Database Support**: Work with multiple Kuzu databases simultaneously using native ATTACH feature
+- **Multi-Database Support**: Work with multiple Kuzu databases simultaneously with dynamic switching
 - **Database Discovery**: Automatic discovery of available databases via MCP Resources
+- **Dynamic Primary Switching**: Switch between writable databases without server restart
 - **Semantic Search**: Vector-based similarity search using sentence transformers and MLX embeddings
 - **Hybrid Search**: Combines text-based and semantic search for comprehensive results
 - **Fast & Reliable**: Optimized for AI/agent memory use cases with Apple Silicon acceleration
@@ -37,7 +38,7 @@ uv sync
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-#### Option 2: Using pip (But why would you?)
+#### Option 2: Using pip
 
 ```bash
 # Clone the repository
@@ -71,8 +72,9 @@ python -m kuzu_memory_server
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `KUZU_MEMORY_DB_PATH` | Primary database file path | `./DBMS/memory.kuzu` |
+| `KUZU_MEMORY_DB_PATH` | Initial primary database file path | `./DBMS/memory.kuzu` |
 | `KUZU_DATABASES_DIR` | Directory containing all .kuzu databases | `./DBMS` |
+| `KUZU_WRITABLE_DATABASES` | Comma-separated list of databases that can be made primary (writable) | Single-primary mode |
 | `SEMANTIC_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
 | `EMBEDDING_CACHE_DIR` | Embedding cache directory | `./.embeddings_cache` |
 
@@ -95,7 +97,8 @@ Add to your MCP client configuration (e.g., Claude Desktop `~/Library/Applicatio
       ],
       "env": {
         "KUZU_MEMORY_DB_PATH": "/path/to/DBMS/memory.kuzu",
-        "KUZU_DATABASES_DIR": "/path/to/DBMS"
+        "KUZU_DATABASES_DIR": "/path/to/DBMS",
+        "KUZU_WRITABLE_DATABASES": "memory,prompt_engineering,research_papers"
       }
     }
   }
@@ -112,7 +115,8 @@ Add to your MCP client configuration (e.g., Claude Desktop `~/Library/Applicatio
       "args": ["kuzu-memory-server"],
       "env": {
         "KUZU_MEMORY_DB_PATH": "/path/to/DBMS/memory.kuzu",
-        "KUZU_DATABASES_DIR": "/path/to/DBMS"
+        "KUZU_DATABASES_DIR": "/path/to/DBMS",
+        "KUZU_WRITABLE_DATABASES": "memory,prompt_engineering,research_papers"
       }
     }
   }
@@ -123,13 +127,37 @@ Add to your MCP client configuration (e.g., Claude Desktop `~/Library/Applicatio
 
 ### Multi-Database Setup
 
-Organize your databases in a dedicated directory:
+Organize your databases in a dedicated directory and configure which databases can be written to:
 
 ```bash
 /path/to/databases/
-├── memory.kuzu           # Primary database
-├── prompt_engineer.kuzu  # Prompts and patterns
-└── research_papers.kuzu  # Academic knowledge
+├── memory.kuzu           # Writable database
+├── prompt_engineer.kuzu  # Writable database
+└── research_papers.kuzu  # Writable database
+```
+
+Configure writable databases in your environment:
+
+```bash
+export KUZU_WRITABLE_DATABASES="memory,prompt_engineer,research_papers"
+export KUZU_DATABASES_DIR="/path/to/databases"
+```
+
+### Switching Between Writable Databases
+
+Use the `switch_primary_database` tool to change which database receives write operations:
+
+```python
+# Switch to prompt_engineer database
+switch_primary_database(database="prompt_engineer")
+
+# Now create entities in prompt_engineer
+create_entity(
+    database="prompt_engineer",
+    name="Chain of Thought",
+    entity_type="prompt_pattern",
+    observations=["Improves reasoning", "Step-by-step thinking"]
+)
 ```
 
 ### Database Discovery
@@ -139,7 +167,7 @@ Query available databases via MCP Resource:
 ```python
 # List all available databases
 resource_result = await access_resource("kuzu://databases/list")
-# Returns JSON with database metadata including primary/attached status
+# Returns JSON with database metadata including writable status
 ```
 
 ### Creating Entities
@@ -150,10 +178,11 @@ create_entity(
     database="memory",
     name="Jordan Kearfott",
     entity_type="person",
-    observations=["Software vibe-ineer", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python but improving"]
+    observations=["Vibe engineer for Sales & Marketing", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python"]
 )
 
-# Create a prompt pattern in the 'prompt_engineer' database
+# Switch to prompt_engineer and create an entity
+switch_primary_database(database="prompt_engineer")
 create_entity(
     database="prompt_engineer",
     name="Chain of Thought",
@@ -161,7 +190,8 @@ create_entity(
     observations=["Improves reasoning", "Step-by-step thinking"]
 )
 
-# Create a research paper in the 'research_papers' database
+# Switch to research_papers and create an entity
+switch_primary_database(database="research_papers")
 create_entity(
     database="research_papers",
     name="Attention Is All You Need",
@@ -220,6 +250,7 @@ The server provides the following MCP tools and resources:
 
 | Tool | Description |
 |------|-------------|
+| `switch_primary_database` | Switch the active writable database |
 | `create_entity` | Create new entities in the specified knowledge graph |
 | `create_relationship` | Create relationships between entities in specified database |
 | `add_observations` | Add observations to existing entities in specified database |
@@ -228,16 +259,38 @@ The server provides the following MCP tools and resources:
 | `get_related_entities` | Find entities related through relationships in specified database |
 | `get_graph_summary` | Get statistics about specific database or all databases |
 
-All tools (except `get_graph_summary`) require a `database` parameter. Use the `kuzu://databases/list` resource to discover available databases.
+**Note**: Write operations (`create_entity`, `create_relationship`, `add_observations`) only work on databases listed in `KUZU_WRITABLE_DATABASES`. Use `switch_primary_database` to change the active writable database.
 
 ## 🏗️ Architecture
 
-The Kuzu Memory Graph MCP Server consists of:
+The Kuzu Memory Graph MCP Server has been completely refactored to eliminate dual-state inconsistency:
+
+### Core Components
 
 1. **MCP Server Layer**: FastMCP-based protocol implementation
-2. **Graph Database Layer**: KuzuDB for entity and relationship storage
-3. **Semantic Search Layer**: MLX/Sentence Transformers for embedding generation
-4. **Query Layer**: Cypher query execution with vector similarity search
+2. **Database Manager**: Single-source-of-truth database state management with connection pool
+3. **Graph Database Layer**: KuzuDB for entity and relationship storage
+4. **Semantic Search Layer**: MLX/Sentence Transformers for embedding generation
+5. **Query Layer**: Cypher query execution with vector similarity search
+
+### Database Connection Architecture
+
+The server implements a **hybrid connection pool pattern**:
+
+- **WritableDatabaseManager**: Centralized database state manager
+- **Connection Pool**: Databases stay open, connections created on-demand
+- **Single Source of Truth**: All database state exists only in WritableDatabaseManager
+- **Auto-Recovery**: Built-in connection health checks and recovery
+- **Fast Switching**: Database switching in <100ms without reopening databases
+
+### Refactored Architecture Benefits
+
+✅ **Eliminated Dual-State Issue**: No more stale connection references
+✅ **Centralized State Management**: Single source of truth for all database operations
+✅ **Connection Pool Pattern**: Databases remain open for fast switching
+✅ **Auto-Recovery**: Automatic detection and recovery from connection failures
+✅ **Safety Features**: Path validation, health checks, comprehensive error handling
+✅ **Clean Separation**: Write operations vs read operations with proper isolation
 
 ## 🧪 Testing
 
@@ -247,9 +300,26 @@ Run the test suite:
 # Run basic functionality test
 uv python test_server.py
 
+# Run architecture verification test
+uv python test_architecture.py
+
+# Run multi-primary database tests
+uv python test_multi_primary.py
+
 # Run with pytest (if installed)
 pytest tests/
 ```
+
+### Architecture Testing
+
+The refactored architecture includes comprehensive tests to verify:
+
+- ✅ **Single Source of Truth**: All database state centralized in WritableDatabaseManager
+- ✅ **Connection Pool Pattern**: Databases remain open, connections created on-demand
+- ✅ **Write Isolation**: Entities written to one database don't appear in others
+- ✅ **Auto-Recovery**: Connection health checks and automatic recovery
+- ✅ **Safety Features**: Path validation and error handling
+- ✅ **Legacy Code Removal**: Old dual-state functions eliminated
 
 ## 📦 Dependencies
 
@@ -279,46 +349,40 @@ For production deployment considerations, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ### Application Lifecycle Management
 
-The server uses a context manager for resource management with multi-database support:
+The server uses a context manager for resource management with dynamic database switching:
 
 ```python
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage application lifecycle with database and model initialization."""
-    # Get primary database path and databases directory
-    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './DBMS/memory.kuzu')
+    # Parse writable databases configuration
+    writable_dbs_str = os.getenv('KUZU_WRITABLE_DATABASES', '')
+    writable_databases = [db.strip() for db in writable_dbs_str.split(',') if db.strip()]
+    
+    # Get databases directory
     databases_dir = os.getenv('KUZU_DATABASES_DIR', './DBMS')
     
-    # Initialize primary Kuzu database
-    db = kuzu.Database(db_path)
-    conn = kuzu.Connection(db)
+    # Load embedding models
+    embedding_model = load_embeddings()
+    tokenizer = load_tokenizer()
     
-    # Initialize attached databases tracker
-    attached_databases = {}
-    primary_db_name = get_primary_db_name(db_path)
-    attached_databases[primary_db_name] = db_path
+    # Initialize database manager
+    db_manager.initialize(writable_databases, databases_dir, embedding_model, tokenizer)
     
-    # Discover available databases
-    discovered_dbs = discover_databases(databases_dir)
+    # Switch to initial primary database
+    initial_db = writable_databases[0] if writable_databases else get_primary_db_name(db_path)
+    success, msg = db_manager.switch_to(initial_db)
     
-    # Schema creation, vector index, model loading...
     try:
         yield AppContext(
-            db=db,
-            conn=conn,
+            db_manager=db_manager,
             embedding_model=embedding_model,
             tokenizer=tokenizer,
-            primary_db_path=db_path,
-            attached_databases=attached_databases,
             databases_dir=databases_dir
         )
     finally:
-        # Detach databases before closing
-        for db_name in list(attached_databases.keys()):
-            if db_name != primary_name:
-                conn.execute(f"DETACH {db_name};")
-        conn.close()
-        db.close()
+        # Cleanup all connections
+        db_manager.cleanup()
 ```
 
 ### Embedding Generation

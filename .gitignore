@@ -19,3 +19,4 @@ DBMS/docs/*.py
 *.wal
 # Exclude DBMS documentation
 DBMS/docs/
+DBMS/
