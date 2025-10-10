@@ -1,10 +1,11 @@
 # Kuzu Memory Graph MCP Server - Development Guide
 
-This guide provides comprehensive information to understand, contribute to, or extend the Kuzu Memory Graph MCP Server.
+This guide provides comprehensive information to understand, contribute to, or extend the Kuzu Memory Graph MCP Server with multi-database support.
 
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+- [Multi-Database Architecture](#multi-database-architecture)
 - [Development Setup](#development-setup)
 - [Code Organization](#code-organization)
 - [Key Components](#key-components)
@@ -25,7 +26,8 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
 │        Main Server Implementation       │
 │     (src/kuzu_memory_server.py)         │
 │   - Tool Definitions & Handlers         │
-│   - Database Management                 │
+│   - Multi-Database Management           │
+│   - Database Discovery & Attachment     │
 │   - Embedding Generation (MLX/ST)       │
 ├─────────────────────────────────────────┤
 │          Semantic Search Module         │
@@ -35,15 +37,76 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
 │   - Embedding Caching                   │
 ├─────────────────────────────────────────┤
 │              Data Layer                 │
-│         (KuzuDB + Vector Index)         │
+│         (Multiple KuzuDB Databases)     │
+│         (Vector Index per Database)     │
 └─────────────────────────────────────────┘
 ```
+
+## Multi-Database Architecture
+
+The server supports multiple Kuzu databases simultaneously using Kuzu's native `ATTACH DATABASE` feature:
+
+### Database Management Components
+
+1. **Database Discovery**
+   - `discover_databases()`: Scans directory for `.kuzu` files
+   - Auto-detects available databases at startup
+
+2. **Database Attachment**
+   - `ensure_database_attached()`: Lazily attaches databases when first accessed
+   - Tracks attached databases in `AppContext.attached_databases`
+
+3. **Context Switching**
+   - `switch_database_context()`: Switches active database using `USE` statement
+   - Each tool call switches to the specified database
+
+4. **Resource-Based Discovery**
+   - `kuzu://databases/list` MCP Resource exposes available databases
+   - Returns JSON with database metadata including primary/attached status
+
+### Database Lifecycle
+
+```graph
+Server Startup
+    ↓
+Discover Databases (scan KUZU_DATABASES_DIR)
+    ↓
+Open Primary Database (KUZU_MEMORY_DB_PATH)
+    ↓
+Initialize Schema & Vector Index
+    ↓
+Load MLX Embedding Model
+    ↓
+Ready for Requests
+    ↓
+Tool Call with Database Parameter
+    ↓
+Ensure Database Attached (ATTACH if needed)
+    ↓
+Switch Context (USE database)
+    ↓
+Execute Query
+    ↓
+Return Result
+    ↓
+Server Shutdown
+    ↓
+Detach All Databases
+    ↓
+Close Connections
+```
+
+### Environment Variables
+
+- `KUZU_MEMORY_DB_PATH`: Primary database file path (default: `./DBMS/memory.kuzu`)
+- `KUZU_DATABASES_DIR`: Directory containing all .kuzu databases (default: `./DBMS`)
 
 ### Core Components
 
 1. **Main Server (`src/kuzu_memory_server.py`)**
    - FastMCP-based server implementation with all tools
-   - Database connection and schema management
+   - Multi-database connection and schema management
+   - Database discovery and attachment management
    - Embedding generation with MLX (Apple Silicon) and Sentence Transformers fallback
    - Application lifecycle management
 
@@ -53,9 +116,10 @@ The Kuzu Memory Graph MCP Server follows a simplified architecture with only two
    - Embedding caching functionality
 
 3. **Database Layer**
-   - KuzuDB connection management
-   - Schema initialization and vector index creation
-   - Entity and relationship storage
+   - Multiple KuzuDB connection management
+   - Schema initialization and vector index creation per database
+   - Entity and relationship storage across databases
+   - Lazy database attachment and context switching
 
 ## Development Setup
 
@@ -160,19 +224,46 @@ async def create_entity(ctx: Context, name: str, entity_type: str, observations:
 
 ### Application Lifecycle Management
 
-The server uses a context manager for resource management:
+The server uses a context manager for resource management with multi-database support:
 
 ```python
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage application lifecycle with database and model initialization."""
-    # Database setup
-    # Model loading
-    # Schema creation
+    # Get primary database path and databases directory
+    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './DBMS/memory.kuzu')
+    databases_dir = os.getenv('KUZU_DATABASES_DIR', './DBMS')
+    
+    # Initialize primary Kuzu database
+    db = kuzu.Database(db_path)
+    conn = kuzu.Connection(db)
+    
+    # Initialize attached databases tracker
+    attached_databases = {}
+    primary_db_name = get_primary_db_name(db_path)
+    attached_databases[primary_db_name] = db_path
+    
+    # Discover available databases
+    discovered_dbs = discover_databases(databases_dir)
+    
+    # Schema creation, vector index, model loading...
     try:
-        yield AppContext(db=db, conn=conn, embedding_model=model, tokenizer=tokenizer)
+        yield AppContext(
+            db=db,
+            conn=conn,
+            embedding_model=embedding_model,
+            tokenizer=tokenizer,
+            primary_db_path=db_path,
+            attached_databases=attached_databases,
+            databases_dir=databases_dir
+        )
     finally:
-        # Cleanup
+        # Detach databases before closing
+        for db_name in list(attached_databases.keys()):
+            if db_name != primary_name:
+                conn.execute(f"DETACH {db_name};")
+        conn.close()
+        db.close()
 ```
 
 ### Embedding Generation
@@ -317,8 +408,8 @@ logger.debug(f"Generated embedding dimension: {len(embedding)}")
 
    ```python
    # Check database path and permissions
-   print(f"Database path: {db_path}")
-   print(f"Database exists: {os.path.exists(db_path)}")
+   print(f"text {var}", file=sys.stderr)f"Database path: {db_path}")
+   print(f"text {var}", file=sys.stderr)f"Database exists: {os.path.exists(db_path)}")
    ```
 
 2. **Embedding Generation Problems**:
@@ -326,15 +417,15 @@ logger.debug(f"Generated embedding dimension: {len(embedding)}")
    ```python
    # Test embedding generation
    test_embedding = generate_embedding(model, tokenizer, "test")
-   print(f"Embedding dimension: {len(test_embedding)}")
-   print(f"Sample values: {test_embedding[:5]}")
+   print(f"text {var}", file=sys.stderr)f"Embedding dimension: {len(test_embedding)}")
+   print(f"text {var}", file=sys.stderr)f"Sample values: {test_embedding[:5]}")
    ```
 
 3. **MCP Tool Registration**:
 
    ```python
    # List registered tools
-   print("Registered tools:", list(mcp.tools.keys()))
+   print(f"text {var}", file=sys.stderr)"Registered tools:", list(mcp.tools.keys()))
    ```
 
 ### Performance Profiling
@@ -378,10 +469,12 @@ ruff check src/ tests/ --fix
 ### Adding New MCP Tools
 
 1. Define the tool function with proper type hints
-2. Add comprehensive docstring with parameter descriptions
-3. Implement error handling
-4. Add tests for the new tool
-5. Update API documentation
+2. Add `database` parameter (first parameter after `ctx`)
+3. Add comprehensive docstring with parameter descriptions
+4. Implement database attachment and context switching
+5. Implement error handling
+6. Add tests for the new tool
+7. Update API documentation
 
 Example:
 
@@ -389,23 +482,39 @@ Example:
 @mcp.tool()
 async def new_tool(
     ctx: Context[ServerSession, AppContext],
+    database: str,  # Required: Database parameter
     param1: str,
     param2: int = 10
 ) -> dict[str, Any]:
     """New tool description.
     
     Args:
+        database: Database name (query kuzu://databases/list to see available)
         param1: Description of parameter 1
         param2: Description of parameter 2 (default: 10)
         
     Returns:
         Dictionary with tool results
     """
+    app_ctx = ctx.request_context.lifespan_context
+    conn = app_ctx.conn
+    
+    # Attach and switch to database
+    success, msg = ensure_database_attached(
+        conn, app_ctx.attached_databases, database, app_ctx.databases_dir
+    )
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
+    success, msg = switch_database_context(conn, database)
+    if not success:
+        return {"status": "error", "message": msg, "database": database}
+    
     try:
         # Implementation
-        return {"status": "success", "result": result}
+        return {"status": "success", "database": database, "result": result}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "database": database}
 ```
 
 ### Schema Changes
@@ -425,9 +534,9 @@ def migrate_schema(conn: kuzu.Connection):
     try:
         # Add new column
         conn.execute("ALTER TABLE Entity ADD COLUMN new_field STRING;")
-        print("Schema migration completed")
+        print(f"text {var}", file=sys.stderr)"Schema migration completed")
     except Exception as e:
-        print(f"Migration failed: {e}")
+        print(f"text {var}", file=sys.stderr)f"Migration failed: {e}")
 ```
 
 ## Extension Points
@@ -448,6 +557,40 @@ class CustomEmbeddingProvider:
     def batch_encode(self, texts: list[str]) -> list[list[float]]:
         # Batch encoding logic
         return [self.encode(text) for text in texts]
+```
+
+### Multi-Database Extensions
+
+Add custom database management features:
+
+```python
+def custom_database_filter(
+    databases: dict[str, dict[str, str]],
+    filter_criteria: dict[str, Any]
+) -> dict[str, dict[str, str]]:
+    """Filter databases based on custom criteria."""
+    filtered = {}
+    for name, info in databases.items():
+        # Apply custom filtering logic
+        if matches_criteria(info, filter_criteria):
+            filtered[name] = info
+    return filtered
+
+def cross_database_query(
+    ctx: Context,
+    query: str,
+    databases: list[str]
+) -> dict[str, Any]:
+    """Execute query across multiple databases."""
+    results = {}
+    for db_name in databases:
+        # Switch to each database and execute query
+        success, _ = ensure_database_attached(...)
+        if success:
+            switch_database_context(...)
+            result = execute_query(query)
+            results[db_name] = result
+    return {"results": results}
 ```
 
 ### Additional Entity Types

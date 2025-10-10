@@ -4,11 +4,10 @@ A high-performance LLM memory server using Kuzu graph database with semantic sea
 
 ## 🌟 Features
 
-- **Multi-Database Support**: Work with multiple Kuzu databases simultaneously using native ATTACH feature
 - **Graph-based Memory Storage**: Uses KuzuDB for efficient relationship traversal and complex queries
-- **Semantic Search**: Vector-based similarity search using sentence transformers and MLX embeddings
-- **MCP Protocol**: Full Model Context Protocol implementation for AI assistant integration
+- **Multi-Database Support**: Work with multiple Kuzu databases simultaneously using native ATTACH feature
 - **Database Discovery**: Automatic discovery of available databases via MCP Resources
+- **Semantic Search**: Vector-based similarity search using sentence transformers and MLX embeddings
 - **Hybrid Search**: Combines text-based and semantic search for comprehensive results
 - **Fast & Reliable**: Optimized for AI/agent memory use cases with Apple Silicon acceleration
 - **Flexible Entity Model**: Support for custom entity types and relationships
@@ -151,7 +150,7 @@ create_entity(
     database="memory",
     name="Jordan Kearfott",
     entity_type="person",
-    observations=["LLMvibe engngineer for sales and marketing", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python but improving"]
+    observations=["Software vibe-ineer", "Studies LLM Memory techniques", "Lives in Gainesville", "Mid at Python but improving"]
 )
 
 # Create a prompt pattern in the 'prompt_engineer' database
@@ -280,19 +279,46 @@ For production deployment considerations, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ### Application Lifecycle Management
 
-The server uses a context manager for resource management:
+The server uses a context manager for resource management with multi-database support:
 
 ```python
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage application lifecycle with database and model initialization."""
-    # Database setup
-    # Model loading
-    # Schema creation
+    # Get primary database path and databases directory
+    db_path = os.getenv('KUZU_MEMORY_DB_PATH', './DBMS/memory.kuzu')
+    databases_dir = os.getenv('KUZU_DATABASES_DIR', './DBMS')
+    
+    # Initialize primary Kuzu database
+    db = kuzu.Database(db_path)
+    conn = kuzu.Connection(db)
+    
+    # Initialize attached databases tracker
+    attached_databases = {}
+    primary_db_name = get_primary_db_name(db_path)
+    attached_databases[primary_db_name] = db_path
+    
+    # Discover available databases
+    discovered_dbs = discover_databases(databases_dir)
+    
+    # Schema creation, vector index, model loading...
     try:
-        yield AppContext(db=db, conn=conn, embedding_model=model, tokenizer=tokenizer)
+        yield AppContext(
+            db=db,
+            conn=conn,
+            embedding_model=embedding_model,
+            tokenizer=tokenizer,
+            primary_db_path=db_path,
+            attached_databases=attached_databases,
+            databases_dir=databases_dir
+        )
     finally:
-        # Cleanup
+        # Detach databases before closing
+        for db_name in list(attached_databases.keys()):
+            if db_name != primary_name:
+                conn.execute(f"DETACH {db_name};")
+        conn.close()
+        db.close()
 ```
 
 ### Embedding Generation
@@ -437,8 +463,8 @@ logger.debug(f"Generated embedding dimension: {len(embedding)}")
 
    ```python
    # Check database path and permissions
-   print(f"Database path: {db_path}")
-   print(f"Database exists: {os.path.exists(db_path)}")
+   print(f"text {var}", file=sys.stderr)f"Database path: {db_path}")
+   print(f"text {var}", file=sys.stderr)f"Database exists: {os.path.exists(db_path)}")
    ```
 
 2. **Embedding Generation Problems**:
@@ -446,15 +472,15 @@ logger.debug(f"Generated embedding dimension: {len(embedding)}")
    ```python
    # Test embedding generation
    test_embedding = generate_embedding(model, tokenizer, "test")
-   print(f"Embedding dimension: {len(test_embedding)}")
-   print(f"Sample values: {test_embedding[:5]}")
+   print(f"text {var}", file=sys.stderr)f"Embedding dimension: {len(test_embedding)}")
+   print(f"text {var}", file=sys.stderr)f"Sample values: {test_embedding[:5]}")
    ```
 
 3. **MCP Tool Registration**:
 
    ```python
    # List registered tools
-   print("Registered tools:", list(mcp.tools.keys()))
+   print(f"text {var}", file=sys.stderr)"Registered tools:", list(mcp.tools.keys()))
    ```
 
 ### Performance Profiling

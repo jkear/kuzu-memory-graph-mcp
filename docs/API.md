@@ -1,12 +1,12 @@
 # Kuzu Memory Graph MCP Server API Documentation
 
-This document provides detailed information about all MCP tools, their parameters, and example usage for the Kuzu Memory Graph MCP Server.
+This document provides detailed information about all MCP tools, resources, their parameters, and example usage for the Kuzu Memory Graph MCP Server with multi-database support.
 
 ## Project Structure
 
 The server has been simplified to use only two main files:
 
-- `src/kuzu_memory_server.py` - Main MCP server with all tools and database management
+- `src/kuzu_memory_server.py` - Main MCP server with all tools, database management, and multi-database support
 - `src/semantic_search.py` - Semantic search utilities (used as fallback for embeddings)
 
 ## Table of Contents
@@ -14,9 +14,15 @@ The server has been simplified to use only two main files:
 - [Kuzu Memory Graph MCP Server API Documentation](#kuzu-memory-graph-mcp-server-api-documentation)
   - [Project Structure](#project-structure)
   - [Table of Contents](#table-of-contents)
+  - [Multi-Database Architecture](#multi-database-architecture)
+    - [Database Discovery](#database-discovery)
+    - [Database Management](#database-management)
+    - [Example Database Structure](#example-database-structure)
   - [Graph Schema](#graph-schema)
     - [Entity Node Table](#entity-node-table)
     - [Relationship Table](#relationship-table)
+  - [MCP Resources](#mcp-resources)
+    - [kuzu://databases/list](#kuzudatabaseslist)
   - [MCP Tools](#mcp-tools)
     - [create\_entity](#create_entity)
     - [create\_relationship](#create_relationship)
@@ -33,8 +39,6 @@ The server has been simplified to use only two main files:
     - [Common Error Formats](#common-error-formats)
     - [Specific Error Cases](#specific-error-cases)
     - [Best Practices for Error Handling](#best-practices-for-error-handling)
-
-## Graph Schema
 
 The knowledge graph uses the following schema:
 
@@ -77,14 +81,57 @@ CREATE REL TABLE RELATED_TO (
 - `confidence`: Confidence score for the relationship (0.0-1.0)
 - `created_date`: When the relationship was created
 
+## MCP Resources
+
+### kuzu://databases/list
+
+Lists all available Kuzu databases in the workspace with metadata.
+
+**Returns:**
+
+```json
+{
+  "databases": [
+    {
+      "name": "memory",
+      "description": "Database: memory",
+      "is_primary": true,
+      "is_attached": true
+    },
+    {
+      "name": "prompt_engineer",
+      "description": "Database: prompt_engineer",
+      "is_primary": false,
+      "is_attached": false
+    },
+    {
+      "name": "research_papers",
+      "description": "Database: research_papers",
+      "is_primary": false,
+      "is_attached": false
+    }
+  ],
+  "count": 3,
+  "primary_database": "memory"
+}
+```
+
+**Example Usage:**
+
+```python
+# Query the resource to discover available databases
+databases = await access_resource("kuzu://databases/list")
+```
+
 ## MCP Tools
 
 ### create_entity
 
-Creates a new entity in the knowledge graph with automatic embedding generation.
+Creates a new entity in the specified knowledge graph with automatic embedding generation.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `name` (string, required): Unique name for the entity
 - `entity_type` (string, required): Type/category of the entity
 - `observations` (list[string], optional): List of observations/facts about the entity
@@ -94,6 +141,7 @@ Creates a new entity in the knowledge graph with automatic embedding generation.
 ```json
 {
   "status": "created|exists",
+  "database": "database_name",
   "name": "entity_name",
   "type": "entity_type",
   "observations_count": 3,
@@ -105,6 +153,7 @@ Creates a new entity in the knowledge graph with automatic embedding generation.
 
 ```json
 {
+  "database": "memory",
   "name": "Alice Johnson",
   "entity_type": "person",
   "observations": [
@@ -120,6 +169,7 @@ Creates a new entity in the knowledge graph with automatic embedding generation.
 ```json
 {
   "status": "created",
+  "database": "memory",
   "name": "Alice Johnson",
   "type": "person",
   "observations_count": 3,
@@ -129,10 +179,11 @@ Creates a new entity in the knowledge graph with automatic embedding generation.
 
 ### create_relationship
 
-Creates a relationship between two existing entities.
+Creates a relationship between two existing entities in the specified database.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `from_entity` (string, required): Name of the source entity
 - `to_entity` (string, required): Name of the target entity
 - `relationship_type` (string, required): Type of relationship
@@ -143,6 +194,7 @@ Creates a relationship between two existing entities.
 ```json
 {
   "status": "created|error",
+  "database": "database_name",
   "from": "source_entity",
   "to": "target_entity",
   "relationship_type": "relationship_type",
@@ -154,6 +206,7 @@ Creates a relationship between two existing entities.
 
 ```json
 {
+  "database": "memory",
   "from_entity": "Alice Johnson",
   "to_entity": "Machine Learning",
   "relationship_type": "EXPERT_IN",
@@ -166,6 +219,7 @@ Creates a relationship between two existing entities.
 ```json
 {
   "status": "created",
+  "database": "memory",
   "from": "Alice Johnson",
   "to": "Machine Learning",
   "relationship_type": "EXPERT_IN",
@@ -175,10 +229,11 @@ Creates a relationship between two existing entities.
 
 ### add_observations
 
-Adds new observations to an existing entity and updates its embedding.
+Adds new observations to an existing entity in the specified database and updates its embedding.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `entity_name` (string, required): Name of the entity to update
 - `observations` (list[string], required): List of new observations to add
 
@@ -187,6 +242,7 @@ Adds new observations to an existing entity and updates its embedding.
 ```json
 {
   "status": "updated|no_change|error",
+  "database": "database_name",
   "entity_name": "entity_name",
   "added_observations": ["new_observation"],
   "total_observations": 5,
@@ -198,6 +254,7 @@ Adds new observations to an existing entity and updates its embedding.
 
 ```json
 {
+  "database": "memory",
   "entity_name": "Alice Johnson",
   "observations": [
     "Recently completed TensorFlow certification",
@@ -211,6 +268,7 @@ Adds new observations to an existing entity and updates its embedding.
 ```json
 {
   "status": "updated",
+  "database": "memory",
   "entity_name": "Alice Johnson",
   "added_observations": [
     "Recently completed TensorFlow certification",
@@ -223,10 +281,11 @@ Adds new observations to an existing entity and updates its embedding.
 
 ### search_entities
 
-Searches entities using text-based queries across names, types, and observations.
+Searches entities using text-based queries across names, types, and observations in the specified database.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `query` (string, required): Search query string
 - `limit` (integer, optional): Maximum number of results (default: 10)
 
@@ -235,6 +294,7 @@ Searches entities using text-based queries across names, types, and observations
 ```json
 {
   "query": "search_query",
+  "database": "database_name",
   "entities": [
     {
       "name": "entity_name",
@@ -251,6 +311,7 @@ Searches entities using text-based queries across names, types, and observations
 
 ```json
 {
+  "database": "memory",
   "query": "software engineer",
   "limit": 5
 }
@@ -261,6 +322,7 @@ Searches entities using text-based queries across names, types, and observations
 ```json
 {
   "query": "software engineer",
+  "database": "memory",
   "entities": [
     {
       "name": "Alice Johnson",
@@ -279,10 +341,11 @@ Searches entities using text-based queries across names, types, and observations
 
 ### semantic_search
 
-Performs semantic similarity search using vector embeddings.
+Performs semantic similarity search using vector embeddings in the specified database.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `query` (string, required): Search query for semantic matching
 - `limit` (integer, optional): Maximum number of results (default: 10)
 - `threshold` (float, optional): Minimum similarity threshold (0.0-1.0, default: 0.3)
@@ -292,6 +355,7 @@ Performs semantic similarity search using vector embeddings.
 ```json
 {
   "query": "search_query",
+  "database": "database_name",
   "entities": [
     {
       "name": "entity_name",
@@ -310,6 +374,7 @@ Performs semantic similarity search using vector embeddings.
 
 ```json
 {
+  "database": "research_papers",
   "query": "AI programming expertise",
   "limit": 5,
   "threshold": 0.4
@@ -321,6 +386,7 @@ Performs semantic similarity search using vector embeddings.
 ```json
 {
   "query": "AI programming expertise",
+  "database": "research_papers",
   "entities": [
     {
       "name": "Alice Johnson",
@@ -341,10 +407,11 @@ Performs semantic similarity search using vector embeddings.
 
 ### get_related_entities
 
-Finds entities related to a specified entity through relationship traversal.
+Finds entities related to a specified entity through relationship traversal in the specified database.
 
 **Parameters:**
 
+- `database` (string, required): Database name (query kuzu://databases/list to see available)
 - `entity_name` (string, required): Name of the entity to find relations for
 - `max_depth` (integer, optional): Maximum relationship depth (default: 2)
 - `limit` (integer, optional): Maximum number of results (default: 20)
@@ -354,6 +421,7 @@ Finds entities related to a specified entity through relationship traversal.
 ```json
 {
   "entity_name": "source_entity",
+  "database": "database_name",
   "entities": [
     {
       "name": "related_entity",
@@ -373,7 +441,8 @@ Finds entities related to a specified entity through relationship traversal.
 
 ```json
 {
-  "entity_name": "Alice Johnson",
+  "database": "prompt_engineer",
+  "entity_name": "Chain of Thought",
   "max_depth": 2,
   "limit": 10
 }
@@ -383,18 +452,18 @@ Finds entities related to a specified entity through relationship traversal.
 
 ```json
 {
-  "entity_name": "Alice Johnson",
+  "entity_name": "Chain of Thought",
+  "database": "prompt_engineer",
   "entities": [
     {
-      "name": "Machine Learning",
-      "type": "concept",
+      "name": "Tree of Thoughts",
+      "type": "prompt_pattern",
       "observations": [
-        "Subset of AI",
-        "Uses statistical techniques",
-        "Enables computers to learn"
+        "Extends chain of thought",
+        "Multiple reasoning paths"
       ],
       "distance": 1,
-      "relationship_path": ["EXPERT_IN"],
+      "relationship_path": ["EXTENDS"],
       "confidence_path": [0.9]
     }
   ],
@@ -405,15 +474,18 @@ Finds entities related to a specified entity through relationship traversal.
 
 ### get_graph_summary
 
-Provides statistics about the entire knowledge graph.
+Provides statistics about a specific database or all databases.
 
 **Parameters:**
-None
 
-**Returns:**
+- `database` (string, optional): Specific database to summarize, or None for all databases
+
+**Returns (Single Database):**
 
 ```json
 {
+  "scope": "single_database",
+  "database": "database_name",
   "stats": {
     "entities": 100,
     "relationships": 150,
@@ -431,27 +503,65 @@ None
 }
 ```
 
-**Example Response:**
+**Returns (All Databases):**
 
 ```json
 {
+  "scope": "all_databases",
+  "databases": {
+    "memory": {
+      "entities": 50,
+      "relationships": 75
+    },
+    "prompt_engineer": {
+      "entities": 25,
+      "relationships": 30
+    },
+    "research_papers": {
+      "entities": 75,
+      "relationships": 120
+    }
+  },
+  "total_databases": 3
+}
+```
+
+**Example Request (Single Database):**
+
+```json
+{
+  "database": "memory"
+}
+```
+
+**Example Request (All Databases):**
+
+```json
+{}
+```
+
+**Example Response (Single Database):**
+
+```json
+{
+  "scope": "single_database",
+  "database": "memory",
   "stats": {
-    "entities": 150,
-    "relationships": 225,
-    "entity_types": 6,
-    "relationship_types": 10
+    "entities": 50,
+    "relationships": 75,
+    "entity_types": 3,
+    "relationship_types": 4
   },
   "entity_types": [
-    {"type": "person", "count": 60},
-    {"type": "concept", "count": 45},
-    {"type": "document", "count": 30},
+    {"type": "person", "count": 20},
+    {"type": "concept", "count": 15},
     {"type": "organization", "count": 15}
   ],
   "relationship_types": [
-    {"type": "KNOWS", "count": 75},
-    {"type": "EXPERT_IN", "count": 45},
-    {"type": "WORKS_FOR", "count": 30},
-    {"type": "RELATED_TO", "count": 75}
+    {"type": "KNOWS", "count": 25},
+    {"type": "EXPERT_IN", "count": 20},
+    {"type": "WORKS_FOR", "count": 15},
+    {"type": "RELATED_TO", "count": 15}
   ]
 }
 ```

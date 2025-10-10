@@ -20,11 +20,11 @@ from contextlib import asynccontextmanager
 
 async def test_server():
     """Test basic server functionality."""
-    print("Testing Kuzu Memory Graph MCP Server...")
+    print("Testing Kuzu Memory Graph MCP Server...", file=sys.stderr)
 
     # Test lifespan management
     async with app_lifespan(mcp) as app_ctx:
-        print("✓ Database and model initialization successful")
+        print("✓ Database and model initialization successful", file=sys.stderr)
 
         # Test that we can create a simple entity
         from mcp.server.fastmcp import Context
@@ -38,21 +38,29 @@ async def test_server():
         try:
             result = app_ctx.conn.execute("MATCH (e:Entity) RETURN COUNT(e)")
             count = result.get_next()[0]
-            print(f"✓ Database query successful - found {count} entities")
+            print(
+                f"✓ Database query successful - found {count} entities", file=sys.stderr
+            )
         except Exception as e:
-            print(f"✗ Database query failed: {e}")
+            print(f"✗ Database query failed: {e}", file=sys.stderr)
             return False
 
         # Test embedding generation
         try:
             from src.kuzu_memory_server import generate_embedding
-            embedding = generate_embedding(app_ctx.embedding_model, app_ctx.tokenizer, "test entity")
-            print(f"✓ Embedding generation successful - dimension: {len(embedding)}")
+
+            embedding = generate_embedding(
+                app_ctx.embedding_model, app_ctx.tokenizer, "test entity"
+            )
+            print(
+                f"✓ Embedding generation successful - dimension: {len(embedding)}",
+                file=sys.stderr,
+            )
         except Exception as e:
-            print(f"✗ Embedding generation failed: {e}")
+            print(f"✗ Embedding generation failed: {e}", file=sys.stderr)
             return False
 
-        print("✓ All tests passed!")
+        print("✓ All tests passed!", file=sys.stderr)
         return True
 
 

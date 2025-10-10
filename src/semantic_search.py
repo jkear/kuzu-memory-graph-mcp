@@ -6,6 +6,7 @@ Provides vector-based semantic search capabilities using sentence transformers.
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -20,7 +21,9 @@ logger = logging.getLogger(__name__)
 class SemanticSearchEngine:
     """High-performance semantic search using sentence transformers."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", cache_dir: Optional[str] = None):
+    def __init__(
+        self, model_name: str = "all-MiniLM-L6-v2", cache_dir: Optional[str] = None
+    ):
         """Initialize semantic search engine.
 
         Args:
@@ -31,9 +34,12 @@ class SemanticSearchEngine:
         self.cache_dir = Path(cache_dir or "./.embeddings_cache")
         self.cache_dir.mkdir(exist_ok=True)
 
-        print(f"Loading sentence transformer model: {model_name}")
+        print(f"Loading sentence transformer model: {model_name}", file=sys.stderr)
         self.model = SentenceTransformer(model_name)
-        print(f"Model loaded. Embedding dimension: {self.model.get_sentence_embedding_dimension()}")
+        print(
+            f"Model loaded. Embedding dimension: {self.model.get_sentence_embedding_dimension()}",
+            file=sys.stderr,
+        )
 
     def encode_text(self, text: str) -> List[float]:
         """Encode text to embedding vector.
@@ -87,7 +93,9 @@ class SemanticSearchEngine:
 
         return result
 
-    def compute_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
+    def compute_similarity(
+        self, embedding1: List[float], embedding2: List[float]
+    ) -> float:
         """Compute cosine similarity between two embeddings.
 
         Args:
@@ -114,9 +122,12 @@ class SemanticSearchEngine:
 
         return dot_product / (norm1 * norm2)
 
-    def find_most_similar(self, query_embedding: List[float],
-                         candidate_embeddings: List[List[float]],
-                         top_k: int = 5) -> List[Tuple[int, float]]:
+    def find_most_similar(
+        self,
+        query_embedding: List[float],
+        candidate_embeddings: List[List[float]],
+        top_k: int = 5,
+    ) -> List[Tuple[int, float]]:
         """Find most similar embeddings to query.
 
         Args:
@@ -141,15 +152,15 @@ class SemanticSearchEngine:
 
     def _sanitize_cache_key(self, key: str) -> str:
         """Sanitize cache key to prevent path traversal attacks.
-        
+
         Args:
             key: Original cache key
-            
+
         Returns:
             Sanitized cache key safe for filesystem use
         """
         # Remove path separators and limit length
-        safe_key = key.replace('/', '_').replace('\\', '_').replace('..', '_')
+        safe_key = key.replace("/", "_").replace("\\", "_").replace("..", "_")
         # Limit to reasonable length to prevent filesystem issues
         return safe_key[:100] if len(safe_key) > 100 else safe_key
 
@@ -159,21 +170,24 @@ class SemanticSearchEngine:
         Args:
             key: Cache key
             embedding: Embedding vector
-            
+
         Returns:
             True if caching succeeded, False otherwise
         """
         try:
             safe_key = self._sanitize_cache_key(key)
             cache_file = self.cache_dir / f"{safe_key}.json"
-            
-            with open(cache_file, 'w') as f:
-                json.dump({
-                    "embedding": embedding,
-                    "model": self.model_name,
-                    "version": "1.0"
-                }, f)
-            
+
+            with open(cache_file, "w") as f:
+                json.dump(
+                    {
+                        "embedding": embedding,
+                        "model": self.model_name,
+                        "version": "1.0",
+                    },
+                    f,
+                )
+
             logger.debug(f"Cached embedding for key: {safe_key}")
             return True
         except Exception as e:
@@ -192,28 +206,31 @@ class SemanticSearchEngine:
         try:
             safe_key = self._sanitize_cache_key(key)
             cache_file = self.cache_dir / f"{safe_key}.json"
-            
+
             if cache_file.exists():
-                with open(cache_file, 'r') as f:
+                with open(cache_file, "r") as f:
                     data = json.load(f)
-                    
+
                 # Validate cache data structure
-                if (isinstance(data, dict) and
-                    "embedding" in data and
-                    isinstance(data["embedding"], list)):
-                    
+                if (
+                    isinstance(data, dict)
+                    and "embedding" in data
+                    and isinstance(data["embedding"], list)
+                ):
                     # Verify embedding dimension matches expected
                     if len(data["embedding"]) == self.get_embedding_dimension():
                         logger.debug(f"Loaded cached embedding for key: {safe_key}")
                         return data["embedding"]
                     else:
-                        logger.warning(f"Cached embedding dimension mismatch for key: {safe_key}")
-                        
+                        logger.warning(
+                            f"Cached embedding dimension mismatch for key: {safe_key}"
+                        )
+
         except json.JSONDecodeError as e:
             logger.warning(f"Invalid JSON in cache file for key {key}: {e}")
         except Exception as e:
             logger.warning(f"Failed to load cached embedding for key {key}: {e}")
-            
+
         return None
 
     def get_embedding_dimension(self) -> int:
