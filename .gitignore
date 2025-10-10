@@ -20,3 +20,4 @@ DBMS/docs/*.py
 # Exclude DBMS documentation
 DBMS/docs/
 DBMS/
+.vscode/
