@@ -9,7 +9,6 @@ Multi-primary database support - AI can switch between writable databases
 using the switch_primary_database() tool without server restart.
 """
 
-import asyncio
 import os
 import sys
 from collections.abc import AsyncIterator
@@ -48,7 +47,10 @@ class WritableDatabaseManager:
         self.writable_databases = writable_dbs
         self.databases_dir = databases_dir
 
-        print(f"Initializing database manager with writable databases: {writable_dbs}", file=sys.stderr)
+        print(
+            f"Initializing database manager with writable databases: {writable_dbs}",
+            file=sys.stderr,
+        )
 
         # Open all databases in the pool
         for db_name in writable_dbs:
@@ -63,7 +65,10 @@ class WritableDatabaseManager:
                 self.databases[db_name] = db
                 print(f"✓ Opened database in pool: {db_name}", file=sys.stderr)
             except Exception as e:
-                print(f"Warning: Failed to open database '{db_name}': {e}", file=sys.stderr)
+                print(
+                    f"Warning: Failed to open database '{db_name}': {e}",
+                    file=sys.stderr,
+                )
 
     def switch_to(self, db_name: str) -> tuple[bool, str]:
         """Switch active primary database using connection pool.
@@ -92,7 +97,10 @@ class WritableDatabaseManager:
         if self.current_conn:
             try:
                 self.current_conn.close()
-                print(f"Closed previous connection to '{self.current_name}'", file=sys.stderr)
+                print(
+                    f"Closed previous connection to '{self.current_name}'",
+                    file=sys.stderr,
+                )
             except Exception as e:
                 print(f"Warning: Error closing connection: {e}", file=sys.stderr)
 
@@ -155,10 +163,37 @@ class WritableDatabaseManager:
         try:
             self.current_conn.execute("INSTALL vector;")
             self.current_conn.execute("LOAD EXTENSION vector;")
-            print(f"✓ Vector extension loaded for '{self.current_name}'", file=sys.stderr)
+            print(
+                f"✓ Vector extension loaded for '{self.current_name}'", file=sys.stderr
+            )
         except Exception as e:
             # Extension might already be loaded
             print(f"Vector extension note: {e}", file=sys.stderr)
+
+    def _execute_query(
+        self, conn: kuzu.Connection, query: str, params: Optional[dict] = None
+    ) -> kuzu.QueryResult:
+        """Execute a query and return QueryResult with proper type annotation.
+
+        This wrapper centralizes Kuzu's execute() type handling, avoiding
+        scattered type: ignore comments throughout the codebase.
+
+        The type checker sees execute() as returning list[QueryResult], but
+        at runtime it returns a single QueryResult object. This helper makes
+        that contract explicit and safe.
+
+        Args:
+            conn: Active Kuzu connection
+            query: Cypher query string
+            params: Optional query parameters
+
+        Returns:
+            QueryResult object from Kuzu
+        """
+        result = conn.execute(query, params) if params else conn.execute(query)
+        # Kuzu returns QueryResult, but type checker sees list[QueryResult]
+        # This wrapper provides the correct runtime contract
+        return result  # type: ignore
 
     def _is_connection_healthy(self, conn: Optional[kuzu.Connection]) -> bool:
         """Check if a database connection is healthy and usable."""
@@ -167,7 +202,7 @@ class WritableDatabaseManager:
 
         try:
             # Simple test query to verify connection is alive
-            result = conn.execute("RETURN 1 as test")
+            result = self._execute_query(conn, "RETURN 1 as test")
             return result.has_next()
         except Exception as e:
             print(f"Warning: Connection health check failed: {e}", file=sys.stderr)
@@ -186,7 +221,10 @@ class WritableDatabaseManager:
                 abs_db_path.relative_to(abs_dir_path)
                 return True
             except ValueError:
-                print(f"Warning: Database path '{db_path}' is outside of databases directory '{self.databases_dir}'", file=sys.stderr)
+                print(
+                    f"Warning: Database path '{db_path}' is outside of databases directory '{self.databases_dir}'",
+                    file=sys.stderr,
+                )
                 return False
         except Exception as e:
             print(f"Warning: Path validation error: {e}", file=sys.stderr)
@@ -200,25 +238,39 @@ class WritableDatabaseManager:
 
         # Health check - auto-recover if needed
         if not self._is_connection_healthy(self.current_conn):
-            print(f"Connection to '{self.current_name}' is unhealthy, attempting recovery...", file=sys.stderr)
+            print(
+                f"Connection to '{self.current_name}' is unhealthy, attempting recovery...",
+                file=sys.stderr,
+            )
 
             if self.current_name and self.current_name in self.databases:
                 try:
                     # Recreate connection from pooled database
                     old_conn = self.current_conn
-                    self.current_conn = kuzu.Connection(self.databases[self.current_name])
+                    self.current_conn = kuzu.Connection(
+                        self.databases[self.current_name]
+                    )
 
-                    # Close old connection
+                    # Close old connection (silently ignore errors during recovery)
                     try:
                         old_conn.close()
-                    except:
-                        pass
+                    except Exception as e:
+                        print(
+                            f"Note: Error closing old connection during recovery: {e}",
+                            file=sys.stderr,
+                        )
 
                     # Verify new connection
                     if self._is_connection_healthy(self.current_conn):
-                        print(f"✓ Successfully recovered connection to '{self.current_name}'", file=sys.stderr)
+                        print(
+                            f"✓ Successfully recovered connection to '{self.current_name}'",
+                            file=sys.stderr,
+                        )
                     else:
-                        print(f"✗ Failed to recover connection to '{self.current_name}'", file=sys.stderr)
+                        print(
+                            f"✗ Failed to recover connection to '{self.current_name}'",
+                            file=sys.stderr,
+                        )
                         self.current_conn = None
                         self.current_name = None
                 except Exception as e:
@@ -226,7 +278,10 @@ class WritableDatabaseManager:
                     self.current_conn = None
                     self.current_name = None
             else:
-                print("✗ Cannot recover connection - no current database set", file=sys.stderr)
+                print(
+                    "✗ Cannot recover connection - no current database set",
+                    file=sys.stderr,
+                )
                 self.current_conn = None
 
         return self.current_conn
@@ -261,7 +316,9 @@ class WritableDatabaseManager:
                 db.close()
                 print(f"✓ Closed database in pool: {db_name}", file=sys.stderr)
             except Exception as e:
-                print(f"Warning: Error closing database '{db_name}': {e}", file=sys.stderr)
+                print(
+                    f"Warning: Error closing database '{db_name}': {e}", file=sys.stderr
+                )
 
         self.databases.clear()
         self.current_conn = None
@@ -271,6 +328,31 @@ class WritableDatabaseManager:
 
 # Global database manager instance
 db_manager = WritableDatabaseManager()
+
+
+def _execute_kuzu_query(
+    conn: kuzu.Connection, query: str, params: Optional[dict] = None
+) -> kuzu.QueryResult:
+    """Execute a Kuzu query and return QueryResult with proper type annotation.
+
+    Module-level helper that centralizes Kuzu's execute() type handling.
+    Use this when working with temporary connections outside the db_manager.
+
+    The type checker sees execute() as returning list[QueryResult], but at
+    runtime it returns a single QueryResult object. This helper provides
+    the correct runtime contract.
+
+    Args:
+        conn: Active Kuzu connection
+        query: Cypher query string
+        params: Optional query parameters
+
+    Returns:
+        QueryResult object from Kuzu
+    """
+    result = conn.execute(query, params) if params else conn.execute(query)
+    # Kuzu returns QueryResult, but type checker sees list[QueryResult]
+    return result  # type: ignore
 
 
 @dataclass
@@ -287,25 +369,52 @@ class AppContext:
 
 
 def generate_embedding(model: Any, tokenizer: Any, text: str) -> list[float]:
-    """Generate 384-dimensional embedding using MLX."""
+    """Generate 384-dimensional embedding using MLX.
+
+    MLX operations are handled internally by the model loaded via mlx_embeddings.
+    We work with the model's output tensors directly without importing mlx.core.
+    """
     if not text or not text.strip():
         return [0.0] * 384
 
-    import mlx.core as mx
-
     inputs = tokenizer.encode(text.strip(), return_tensors="mlx")
     outputs = model(inputs)
-    return outputs.text_embeds.tolist()
+
+    # Convert to list and flatten if needed
+    embedding = outputs.text_embeds.tolist()
+
+    # Flatten 2D array to 1D if necessary
+    if (
+        isinstance(embedding, list)
+        and len(embedding) > 0
+        and isinstance(embedding[0], list)
+    ):
+        embedding = embedding[0]  # Take first row if it's 2D
+
+    # Convert to float and ensure correct length
+    embedding = [float(x) for x in embedding]
+
+    # Ensure we have exactly 384 dimensions
+    if len(embedding) != 384:
+        # Pad or truncate to 384 dimensions
+        if len(embedding) > 384:
+            embedding = embedding[:384]
+        else:
+            embedding = embedding + [0.0] * (384 - len(embedding))
+
+    return embedding
 
 
 def batch_generate_embeddings(
     model: Any, tokenizer: Any, texts: list[str]
 ) -> list[list[float]]:
-    """Generate embeddings for multiple texts efficiently."""
+    """Generate embeddings for multiple texts efficiently.
+
+    MLX operations are handled internally by the model loaded via mlx_embeddings.
+    We work with the model's output tensors directly without importing mlx.core.
+    """
     if not texts:
         return []
-
-    import mlx.core as mx
 
     # Filter empty texts and prepare batch
     valid_texts = [
@@ -320,13 +429,34 @@ def batch_generate_embeddings(
     )
     outputs = model(inputs["input_ids"], attention_mask=inputs["attention_mask"])
 
-    # Map results back to original order
+    # Map results back to original order with proper formatting
     embeddings = outputs.text_embeds.tolist()
     result = []
     valid_idx = 0
     for text in texts:
         if text and text.strip():
-            result.append(embeddings[valid_idx])
+            # Get the embedding and flatten if needed
+            embedding = embeddings[valid_idx]
+
+            # Flatten 2D array to 1D if necessary
+            if (
+                isinstance(embedding, list)
+                and len(embedding) > 0
+                and isinstance(embedding[0], list)
+            ):
+                embedding = embedding[0]  # Take first row if it's 2D
+
+            # Convert to float and ensure correct length
+            embedding = [float(x) for x in embedding]
+
+            # Ensure we have exactly 384 dimensions
+            if len(embedding) != 384:
+                if len(embedding) > 384:
+                    embedding = embedding[:384]
+                else:
+                    embedding = embedding + [0.0] * (384 - len(embedding))
+
+            result.append(embedding)
             valid_idx += 1
         else:
             result.append([0.0] * 384)
@@ -386,7 +516,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             file=sys.stderr,
         )
 
-    print(f"Initializing database manager...", file=sys.stderr)
+    print("Initializing database manager...", file=sys.stderr)
     print(f"Databases directory: {databases_dir}", file=sys.stderr)
 
     # Initialize MLX embeddings model
@@ -447,10 +577,15 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     )
 
     # Switch to initial primary database
-    initial_db = writable_databases[0] if writable_databases else get_primary_db_name(db_path)
+    initial_db = (
+        writable_databases[0] if writable_databases else get_primary_db_name(db_path)
+    )
     success, msg = db_manager.switch_to(initial_db)
     if not success:
-        print(f"ERROR: Failed to initialize primary database '{initial_db}': {msg}", file=sys.stderr)
+        print(
+            f"ERROR: Failed to initialize primary database '{initial_db}': {msg}",
+            file=sys.stderr,
+        )
         raise RuntimeError(f"Failed to initialize primary database: {msg}")
 
     # Discover available databases for resource listing
@@ -459,13 +594,16 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
     print("=" * 60, file=sys.stderr)
     print("Kuzu Memory Graph MCP Server Ready!", file=sys.stderr)
-    print(f"Primary database: {db_manager.get_current_name()} (READ-WRITE)", file=sys.stderr)
+    print(
+        f"Primary database: {db_manager.get_current_name()} (READ-WRITE)",
+        file=sys.stderr,
+    )
     print(f"Writable databases: {writable_databases}", file=sys.stderr)
     print(f"Databases in pool: {available_in_pool}", file=sys.stderr)
     print(f"Discovered databases: {list(discovered_dbs.keys())}", file=sys.stderr)
     if len(writable_databases) > 1:
         print(
-            f"✨ Multi-primary mode enabled! Use switch_primary_database() to switch.",
+            "✨ Multi-primary mode enabled! Use switch_primary_database() to switch.",
             file=sys.stderr,
         )
     print("=" * 60, file=sys.stderr)
@@ -523,7 +661,7 @@ async def list_databases(ctx: Context[ServerSession, AppContext]) -> str:
             "count": len(db_list),
             "current_primary": current_primary,
             "writable_databases": writable_databases,
-            "databases_in_pool": available_in_pool
+            "databases_in_pool": available_in_pool,
         },
         indent=2,
     )
@@ -637,7 +775,8 @@ async def create_entity(
     )
 
     try:
-        result = conn.execute(
+        # Create entity (no need to return data, we're just creating)
+        conn.execute(
             """
             CREATE (e:Entity {
                 name: $name,
@@ -647,7 +786,6 @@ async def create_entity(
                 created_date: current_date(),
                 updated_date: current_date()
             })
-            RETURN e.name as name, e.type as type
         """,
             {
                 "name": name,
@@ -727,7 +865,8 @@ async def create_relationship(
             }
 
     try:
-        result = conn.execute(
+        # Create relationship (no need to return data, we're just creating)
+        conn.execute(
             """
             MATCH (from:Entity {name: $from_name})
             MATCH (to:Entity {name: $to_name})
@@ -736,7 +875,6 @@ async def create_relationship(
                 confidence: $confidence,
                 created_date: current_date()
             }]->(to)
-            RETURN from.name as from_name, to.name as to_name, r.relationship_type as type
         """,
             {
                 "from_name": from_entity,
@@ -867,6 +1005,199 @@ async def add_observations(
 
 
 @mcp.tool()
+async def edit_entity(
+    ctx: Context[ServerSession, AppContext],
+    database: str,
+    name: str,
+    new_name: Optional[str] = None,
+    new_type: Optional[str] = None,
+    set_observations: Optional[list[str]] = None,
+    add_observations: Optional[list[str]] = None,
+    remove_observations: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Edit or update an existing entity.
+
+    This tool allows the LLM to modify entities instead of creating duplicates.
+    Can update name, type, and observations (add/remove/replace).
+    Regenerates embedding if observations change.
+
+    Args:
+        database: Database name (must be writable)
+        name: Current name of the entity to edit
+        new_name: Optional new name for the entity
+        new_type: Optional new type for the entity
+        set_observations: Replace all observations with this list
+        add_observations: Add these observations to existing ones
+        remove_observations: Remove these specific observations
+    """
+    app_ctx = ctx.request_context.lifespan_context
+
+    # Get current connection and primary database from manager
+    conn = app_ctx.db_manager.get_connection()
+    current_primary = app_ctx.db_manager.get_current_name()
+
+    if not conn or not current_primary:
+        return {
+            "status": "error",
+            "message": "No active database connection. Please contact administrator.",
+        }
+
+    # Check if trying to write to non-primary database
+    if database != current_primary:
+        # Check if target database is in writable list
+        if app_ctx.db_manager.is_writable(database):
+            return {
+                "status": "error",
+                "message": f"Cannot write to '{database}' - it's not the current primary database. Use switch_primary_database(database='{database}') first to make it writable.",
+                "database": database,
+                "current_primary": current_primary,
+                "suggestion": f"switch_primary_database(database='{database}')",
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Cannot write to '{database}' - only databases in KUZU_WRITABLE_DATABASES can be written to.",
+                "database": database,
+                "current_primary": current_primary,
+                "writable_databases": app_ctx.db_manager.writable_databases,
+            }
+
+    # Get current entity
+    result = conn.execute(
+        """
+        MATCH (e:Entity {name: $name})
+        RETURN e.observations as observations, e.type as type
+    """,
+        {"name": name},
+    )
+
+    if not result.has_next():  # type: ignore
+        return {
+            "status": "error",
+            "database": database,
+            "message": f"Entity '{name}' not found",
+        }
+
+    current_observations, current_type = result.get_next()  # type: ignore
+    current_observations = list(current_observations) if current_observations else []  # type: ignore
+
+    # Build update operations
+    changes = []
+    final_observations = current_observations.copy()
+    needs_reembedding = False
+
+    # Handle observation changes
+    if set_observations is not None:
+        final_observations = set_observations
+        needs_reembedding = True
+        changes.append(f"replaced all observations ({len(final_observations)} total)")
+    else:
+        if add_observations:
+            # Add only new observations
+            new_obs = [obs for obs in add_observations if obs not in final_observations]
+            final_observations.extend(new_obs)
+            if new_obs:
+                needs_reembedding = True
+                changes.append(f"added {len(new_obs)} observations")
+
+        if remove_observations:
+            # Remove specified observations
+            removed_count = 0
+            for obs in remove_observations:
+                if obs in final_observations:
+                    final_observations.remove(obs)
+                    removed_count += 1
+            if removed_count > 0:
+                needs_reembedding = True
+                changes.append(f"removed {removed_count} observations")
+
+    # Handle name change
+    final_name = new_name if new_name is not None else name
+    if new_name and new_name != name:
+        # Check if new name already exists
+        check_result = conn.execute(
+            "MATCH (e:Entity {name: $name}) RETURN count(e) as count",
+            {"name": new_name},
+        )
+        count = check_result.get_next()[0]  # type: ignore
+        if count > 0:
+            return {
+                "status": "error",
+                "database": database,
+                "message": f"Cannot rename: Entity '{new_name}' already exists",
+            }
+        changes.append(f"renamed to '{new_name}'")
+
+    # Handle type change
+    final_type = new_type if new_type is not None else current_type
+    if new_type and new_type != current_type:
+        changes.append(f"changed type to '{new_type}'")
+
+    # No changes?
+    if not changes:
+        return {
+            "status": "no_change",
+            "database": database,
+            "entity_name": name,
+            "message": "No changes specified",
+        }
+
+    # Generate new embedding if observations changed
+    embedding = None
+    if needs_reembedding:
+        text_to_embed = " ".join(final_observations)
+        embedding = generate_embedding(
+            app_ctx.embedding_model, app_ctx.tokenizer, text_to_embed
+        )
+
+    # Build and execute update query
+    if embedding is not None:
+        conn.execute(
+            """
+            MATCH (e:Entity {name: $old_name})
+            SET e.name = $new_name,
+                e.type = $type,
+                e.observations = $observations,
+                e.embedding = $embedding,
+                e.updated_date = current_date()
+        """,
+            {
+                "old_name": name,
+                "new_name": final_name,
+                "type": final_type,
+                "observations": final_observations,
+                "embedding": embedding,
+            },
+        )
+    else:
+        conn.execute(
+            """
+            MATCH (e:Entity {name: $old_name})
+            SET e.name = $new_name,
+                e.type = $type,
+                e.observations = $observations,
+                e.updated_date = current_date()
+        """,
+            {
+                "old_name": name,
+                "new_name": final_name,
+                "type": final_type,
+                "observations": final_observations,
+            },
+        )
+
+    return {
+        "status": "updated",
+        "database": database,
+        "entity_name": final_name,
+        "previous_name": name if name != final_name else None,
+        "changes": changes,
+        "total_observations": len(final_observations),
+        "reembedded": needs_reembedding,
+    }
+
+
+@mcp.tool()
 async def search_entities(
     ctx: Context[ServerSession, AppContext], database: str, query: str, limit: int = 10
 ) -> dict[str, Any]:
@@ -879,24 +1210,43 @@ async def search_entities(
     """
     app_ctx = ctx.request_context.lifespan_context
 
+    # Initialize to None before try block
+    temp_db = None
+    temp_conn = None
+
     # For read operations, we can work with any database, but need to switch context
     # Check if database is available and switch if needed
-    if not app_ctx.db_manager.is_writable(database) and database != app_ctx.db_manager.get_current_name():
+    if (
+        not app_ctx.db_manager.is_writable(database)
+        and database != app_ctx.db_manager.get_current_name()
+    ):
         # For read-only databases, we need to create a temporary connection
         try:
             db_path = os.path.join(app_ctx.databases_dir, f"{database}.kuzu")
             if not os.path.exists(db_path):
-                return {"status": "error", "message": f"Database file not found: {db_path}", "database": database}
+                return {
+                    "status": "error",
+                    "message": f"Database file not found: {db_path}",
+                    "database": database,
+                }
 
             temp_db = kuzu.Database(db_path)
             temp_conn = kuzu.Connection(temp_db)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to connect to database '{database}': {str(e)}", "database": database}
+            return {
+                "status": "error",
+                "message": f"Failed to connect to database '{database}': {str(e)}",
+                "database": database,
+            }
     else:
         # Use current connection from manager
         temp_conn = app_ctx.db_manager.get_connection()
         if not temp_conn:
-            return {"status": "error", "message": "No active database connection", "database": database}
+            return {
+                "status": "error",
+                "message": "No active database connection",
+                "database": database,
+            }
 
     try:
         result = temp_conn.execute(
@@ -931,14 +1281,19 @@ async def search_entities(
             "count": len(entities),
         }
     except Exception as e:
-        return {"status": "error", "message": f"Search failed: {str(e)}", "database": database}
+        return {
+            "status": "error",
+            "message": f"Search failed: {str(e)}",
+            "database": database,
+        }
     finally:
         # Clean up temporary connection if created
-        if 'temp_db' in locals():
+        if temp_db is not None:
             try:
-                temp_conn.close()
+                if temp_conn:
+                    temp_conn.close()
                 temp_db.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -960,21 +1315,40 @@ async def semantic_search(
     """
     app_ctx = ctx.request_context.lifespan_context
 
+    # Initialize to None before try block
+    temp_db = None
+    temp_conn = None
+
     # For read operations, handle database connections like search_entities
-    if not app_ctx.db_manager.is_writable(database) and database != app_ctx.db_manager.get_current_name():
+    if (
+        not app_ctx.db_manager.is_writable(database)
+        and database != app_ctx.db_manager.get_current_name()
+    ):
         try:
             db_path = os.path.join(app_ctx.databases_dir, f"{database}.kuzu")
             if not os.path.exists(db_path):
-                return {"status": "error", "message": f"Database file not found: {db_path}", "database": database}
+                return {
+                    "status": "error",
+                    "message": f"Database file not found: {db_path}",
+                    "database": database,
+                }
 
             temp_db = kuzu.Database(db_path)
             temp_conn = kuzu.Connection(temp_db)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to connect to database '{database}': {str(e)}", "database": database}
+            return {
+                "status": "error",
+                "message": f"Failed to connect to database '{database}': {str(e)}",
+                "database": database,
+            }
     else:
         temp_conn = app_ctx.db_manager.get_connection()
         if not temp_conn:
-            return {"status": "error", "message": "No active database connection", "database": database}
+            return {
+                "status": "error",
+                "message": "No active database connection",
+                "database": database,
+            }
 
     try:
         # Generate query embedding
@@ -1022,6 +1396,7 @@ async def semantic_search(
 
             # Calculate similarities manually
             import numpy as np
+
             query_vec = np.array(query_embedding)
             similarities = []
 
@@ -1074,13 +1449,18 @@ async def semantic_search(
             "method": "vector_similarity",
         }
     except Exception as e:
-        return {"status": "error", "message": f"Semantic search failed: {str(e)}", "database": database}
+        return {
+            "status": "error",
+            "message": f"Semantic search failed: {str(e)}",
+            "database": database,
+        }
     finally:
-        if 'temp_db' in locals():
+        if temp_db is not None:
             try:
-                temp_conn.close()
+                if temp_conn:
+                    temp_conn.close()
                 temp_db.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -1102,21 +1482,40 @@ async def get_related_entities(
     """
     app_ctx = ctx.request_context.lifespan_context
 
+    # Initialize to None before try block
+    temp_db = None
+    temp_conn = None
+
     # Handle database connection like other read tools
-    if not app_ctx.db_manager.is_writable(database) and database != app_ctx.db_manager.get_current_name():
+    if (
+        not app_ctx.db_manager.is_writable(database)
+        and database != app_ctx.db_manager.get_current_name()
+    ):
         try:
             db_path = os.path.join(app_ctx.databases_dir, f"{database}.kuzu")
             if not os.path.exists(db_path):
-                return {"status": "error", "message": f"Database file not found: {db_path}", "database": database}
+                return {
+                    "status": "error",
+                    "message": f"Database file not found: {db_path}",
+                    "database": database,
+                }
 
             temp_db = kuzu.Database(db_path)
             temp_conn = kuzu.Connection(temp_db)
         except Exception as e:
-            return {"status": "error", "message": f"Failed to connect to database '{database}': {str(e)}", "database": database}
+            return {
+                "status": "error",
+                "message": f"Failed to connect to database '{database}': {str(e)}",
+                "database": database,
+            }
     else:
         temp_conn = app_ctx.db_manager.get_connection()
         if not temp_conn:
-            return {"status": "error", "message": "No active database connection", "database": database}
+            return {
+                "status": "error",
+                "message": "No active database connection",
+                "database": database,
+            }
 
     try:
         result = temp_conn.execute(
@@ -1155,13 +1554,18 @@ async def get_related_entities(
             "max_depth": max_depth,
         }
     except Exception as e:
-        return {"status": "error", "message": f"Failed to get related entities: {str(e)}", "database": database}
+        return {
+            "status": "error",
+            "message": f"Failed to get related entities: {str(e)}",
+            "database": database,
+        }
     finally:
-        if 'temp_db' in locals():
+        if temp_db is not None:
             try:
-                temp_conn.close()
+                if temp_conn:
+                    temp_conn.close()
                 temp_db.close()
-            except:
+            except Exception:
                 pass
 
 
@@ -1182,20 +1586,24 @@ async def get_graph_summary(
         summaries = {}
 
         for db_name in discovered_dbs.keys():
+            # Initialize for each iteration
+            temp_db_inner = None
+            temp_conn_inner = None
+
             try:
                 db_path = os.path.join(app_ctx.databases_dir, f"{db_name}.kuzu")
                 if not os.path.exists(db_path):
                     summaries[db_name] = {"error": "Database file not found"}
                     continue
 
-                temp_db = kuzu.Database(db_path)
-                temp_conn = kuzu.Connection(temp_db)
+                temp_db_inner = kuzu.Database(db_path)
+                temp_conn_inner = kuzu.Connection(temp_db_inner)
 
                 try:
-                    entity_count = temp_conn.execute(
+                    entity_count = temp_conn_inner.execute(
                         "MATCH (e:Entity) RETURN COUNT(e)"
                     ).get_next()[0]  # type: ignore
-                    relation_count = temp_conn.execute(
+                    relation_count = temp_conn_inner.execute(
                         "MATCH ()-[r]->() RETURN COUNT(r)"
                     ).get_next()[0]  # type: ignore
 
@@ -1206,8 +1614,10 @@ async def get_graph_summary(
                 except Exception as e:
                     summaries[db_name] = {"error": str(e)}
                 finally:
-                    temp_conn.close()
-                    temp_db.close()
+                    if temp_conn_inner:
+                        temp_conn_inner.close()
+                    if temp_db_inner:
+                        temp_db_inner.close()
             except Exception as e:
                 summaries[db_name] = {"error": str(e)}
 
@@ -1218,11 +1628,23 @@ async def get_graph_summary(
         }
 
     # If database specified, provide detailed summary
+    # Initialize to None before try block
+    temp_db = None
+    temp_conn = None
+    cleanup_temp = False
+
     try:
-        if not app_ctx.db_manager.is_writable(database) and database != app_ctx.db_manager.get_current_name():
+        if (
+            not app_ctx.db_manager.is_writable(database)
+            and database != app_ctx.db_manager.get_current_name()
+        ):
             db_path = os.path.join(app_ctx.databases_dir, f"{database}.kuzu")
             if not os.path.exists(db_path):
-                return {"status": "error", "message": f"Database file not found: {db_path}", "database": database}
+                return {
+                    "status": "error",
+                    "message": f"Database file not found: {db_path}",
+                    "database": database,
+                }
 
             temp_db = kuzu.Database(db_path)
             temp_conn = kuzu.Connection(temp_db)
@@ -1230,35 +1652,49 @@ async def get_graph_summary(
         else:
             temp_conn = app_ctx.db_manager.get_connection()
             if not temp_conn:
-                return {"status": "error", "message": "No active database connection", "database": database}
+                return {
+                    "status": "error",
+                    "message": "No active database connection",
+                    "database": database,
+                }
             cleanup_temp = False
 
-        # Get counts
-        entity_count = temp_conn.execute("MATCH (e:Entity) RETURN COUNT(e)").get_next()[0]  # type: ignore
-        relation_count = temp_conn.execute("MATCH ()-[r]->() RETURN COUNT(r)").get_next()[0]  # type: ignore
+        # Get counts using our type-safe helper
+        entity_count = _execute_kuzu_query(
+            temp_conn, "MATCH (e:Entity) RETURN COUNT(e)"
+        ).get_next()[0]  # type: ignore
+        relation_count = _execute_kuzu_query(
+            temp_conn, "MATCH ()-[r]->() RETURN COUNT(r)"
+        ).get_next()[0]  # type: ignore
 
         # Get entity types
-        result = temp_conn.execute("""
+        result = _execute_kuzu_query(
+            temp_conn,
+            """
             MATCH (e:Entity)
             RETURN e.type, COUNT(e)
             ORDER BY COUNT(e) DESC
-        """)
+        """,
+        )
 
         entity_types = []
-        while result.has_next():  # type: ignore
-            row = result.get_next()  # type: ignore
+        while result.has_next():
+            row = result.get_next()
             entity_types.append({"type": row[0], "count": row[1]})  # type: ignore
 
         # Get relationship types
-        result = temp_conn.execute("""
+        result = _execute_kuzu_query(
+            temp_conn,
+            """
             MATCH ()-[r:RELATED_TO]->()
             RETURN r.relationship_type, COUNT(r)
             ORDER BY COUNT(r) DESC
-        """)
+        """,
+        )
 
         relationship_types = []
-        while result.has_next():  # type: ignore
-            row = result.get_next()  # type: ignore
+        while result.has_next():
+            row = result.get_next()
             relationship_types.append({"type": row[0], "count": row[1]})  # type: ignore
 
         return {
@@ -1274,13 +1710,18 @@ async def get_graph_summary(
             "relationship_types": relationship_types,
         }
     except Exception as e:
-        return {"status": "error", "message": f"Failed to get graph summary: {str(e)}", "database": database}
+        return {
+            "status": "error",
+            "message": f"Failed to get graph summary: {str(e)}",
+            "database": database,
+        }
     finally:
-        if cleanup_temp and 'temp_db' in locals():
+        if cleanup_temp and temp_db is not None:
             try:
-                temp_conn.close()
+                if temp_conn:
+                    temp_conn.close()
                 temp_db.close()
-            except:
+            except Exception:
                 pass
 
 

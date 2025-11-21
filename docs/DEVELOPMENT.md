@@ -194,7 +194,7 @@ uv run kuzu-memory-server
 
 ## Code Organization
 
-The project has been simplified to only essential files:
+The project uses a minimal file structure:
 
 ```bash
 kuzu-memory-graph-mcp/
@@ -211,14 +211,14 @@ kuzu-memory-graph-mcp/
 └── .python-version              # Python version specification
 ```
 
-### Simplified Structure
+### Architecture Philosophy
 
-The project has been streamlined from a multi-module architecture to a simple two-file implementation:
+The project follows a streamlined two-file implementation:
 
 - **Single server file**: All MCP tools and database management in `src/kuzu_memory_server.py`
 - **Utility module**: Semantic search utilities in `src/semantic_search.py` (used as fallback)
-- **Removed complex modules**: No separate config, logging, validation, or connection management files
-- **Direct dependencies**: All dependencies managed through pyproject.toml without complex service layers
+- **Minimal complexity**: Direct implementation without separate config, logging, validation, or connection management layers
+- **Direct dependencies**: All dependencies managed through pyproject.toml
 
 ## Key Components
 

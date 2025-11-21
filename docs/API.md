@@ -24,9 +24,11 @@ The server has been simplified to use only two main files:
   - [MCP Resources](#mcp-resources)
     - [kuzu://databases/list](#kuzudatabaseslist)
   - [MCP Tools](#mcp-tools)
+    - [switch\_primary\_database](#switch_primary_database)
     - [create\_entity](#create_entity)
     - [create\_relationship](#create_relationship)
     - [add\_observations](#add_observations)
+    - [edit\_entity](#edit_entity)
     - [search\_entities](#search_entities)
     - [semantic\_search](#semantic_search)
     - [get\_related\_entities](#get_related_entities)
@@ -377,6 +379,96 @@ Adds new observations to an existing entity in the specified database and update
 ```
 
 **Note**: This tool can only write to the current primary database. Use `switch_primary_database` to change which database is writable.
+
+### edit_entity
+
+Modifies an existing entity in the specified database. Allows updating name, type, and observations with automatic re-embedding when observations change.
+
+**Parameters:**
+
+- `database` (string, required): Database name (must be writable)
+- `name` (string, required): Current name of the entity to edit
+- `new_name` (string, optional): New name for the entity
+- `new_type` (string, optional): New type for the entity
+- `set_observations` (list[string], optional): Replace all observations with this list
+- `add_observations` (list[string], optional): Add these observations to existing ones
+- `remove_observations` (list[string], optional): Remove these specific observations
+
+**Returns:**
+
+```json
+{
+  "status": "updated|no_change|error",
+  "database": "database_name",
+  "entity_name": "final_name",
+  "previous_name": "old_name",
+  "changes": ["renamed to 'new_name'", "added 2 observations"],
+  "total_observations": 5,
+  "reembedded": true
+}
+```
+
+**Example Request (Update Observations):**
+
+```json
+{
+  "database": "memory",
+  "name": "Alice Johnson",
+  "add_observations": [
+    "Now working at AI Startup Inc"
+  ],
+  "remove_observations": [
+    "Software engineer at TechCorp"
+  ]
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "status": "updated",
+  "database": "memory",
+  "entity_name": "Alice Johnson",
+  "previous_name": null,
+  "changes": [
+    "added 1 observations",
+    "removed 1 observations"
+  ],
+  "total_observations": 4,
+  "reembedded": true
+}
+```
+
+**Example Request (Rename Entity):**
+
+```json
+{
+  "database": "memory",
+  "name": "Alice Johnson",
+  "new_name": "Alice Smith",
+  "new_type": "senior_engineer"
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "status": "updated",
+  "database": "memory",
+  "entity_name": "Alice Smith",
+  "previous_name": "Alice Johnson",
+  "changes": [
+    "renamed to 'Alice Smith'",
+    "changed type to 'senior_engineer'"
+  ],
+  "total_observations": 4,
+  "reembedded": false
+}
+```
+
+**Note**: This tool can only write to the current primary database. Use `switch_primary_database` to change which database is writable. When renaming, the tool checks for duplicate names to prevent conflicts.
 
 ### search_entities
 

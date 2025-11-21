@@ -9,6 +9,7 @@ This is a Kuzu Memory Graph MCP Server - a high-performance LLM memory server us
 ## Common Development Commands
 
 ### Running the Server
+
 ```bash
 # Development mode (recommended)
 uv run kuzu-memory-server
@@ -21,9 +22,13 @@ python test_server.py
 ```
 
 ### Testing
+
 ```bash
 # Run basic functionality test
 python test_server.py
+
+# Run architecture verification test
+python test_architecture.py
 
 # Run pytest suite (if available)
 pytest tests/ -v
@@ -33,6 +38,7 @@ pytest --cov=src tests/
 ```
 
 ### Code Quality
+
 ```bash
 # Format code
 black src/ tests/
@@ -50,17 +56,13 @@ The server has been simplified to a two-file architecture:
 
 ### Core Components
 
-1. **Main Server** (`src/kuzu_memory_server.py`)
-   - FastMCP-based server implementation with all tools
-   - Multi-database support with dynamic primary switching via `WritableDatabaseManager`
-   - Database discovery and metadata management
-   - Embedding generation with MLX (Apple Silicon) and Sentence Transformers fallback
-   - Application lifecycle management with proper resource cleanup
+**Main Server** (`src/kuzu_memory_server.py`)
 
-2. **Semantic Search Module** (`src/semantic_search.py`)
-   - Fallback embedding provider using Sentence Transformers
-   - Vector similarity computation utilities
-   - Embedding caching functionality
+- FastMCP-based server implementation with all tools
+- Multi-database support with dynamic primary switching via `WritableDatabaseManager`
+- Database discovery and metadata management
+- Embedding generation with MLX (Apple Silicon) and Sentence Transformers fallback
+- Application lifecycle management with proper resource cleanup
 
 ### Multi-Database Architecture
 
@@ -75,17 +77,42 @@ The server supports multiple Kuzu databases with dynamic primary (writable) data
   - `KUZU_DATABASES_DIR`: Directory containing database files
   - `KUZU_MEMORY_DB_PATH`: Initial primary database path
 
-### Critical Architecture Note
+### ✅ Architecture Status: RESOLVED
 
-**Current Issue**: The `WritableDatabaseManager` implementation has a fundamental architectural flaw where database state exists in TWO places:
-- `db_manager.current_conn` (current, valid)
-- `app_ctx.conn` (stale, closed when switching)
+**Status**: ✅ **FIXED** - Multi-primary database architecture now works correctly
 
-This creates dual-state inconsistency where tools using both references fail with "database is closed" errors. The multi-primary database feature does not work correctly in this state.
+**Solution Implemented**: Complete architectural refactor to ensure single source of truth:
+
+**What Was Fixed**:
+
+1. ✅ **Removed deprecated fields**: `AppContext` no longer has `db`, `conn`, `attached_databases`, or other direct database references
+2. ✅ **Single source of truth**: `db_manager` is now the only way to access database connections
+3. ✅ **Updated all tools**: All MCP tools now use `app_ctx.db_manager.get_connection()` exclusively
+4. ✅ **Connection lifecycle**: Database switching properly closes old connections and creates new ones
+5. ✅ **Write isolation**: Each database maintains separate data when switching
+
+**Architecture Pattern**:
+
+- All database access goes through `app_ctx.db_manager.get_connection()`
+- Current primary database name via `app_ctx.db_manager.get_current_name()`
+- Write operations check if target database is current primary before proceeding
+- Read operations can work with any database (creates temporary connections for non-primary databases)
+
+**Verification**:
+
+- ✅ Created comprehensive test suite (`test_architecture.py`) that verifies:
+  - Database initialization and switching
+  - Write isolation between databases
+  - Connection lifecycle management
+  - Single source of truth pattern
+- ✅ All tests pass, confirming the architecture works correctly
+
+**Status**: 🟢 **WORKING** - Multi-primary database feature fully functional
 
 ## Key Technical Details
 
 ### Database Schema
+
 ```cypher
 CREATE NODE TABLE Entity (
     name STRING PRIMARY KEY,
@@ -105,6 +132,7 @@ CREATE REL TABLE RELATED_TO (
 ```
 
 ### MCP Tools Available
+
 - `switch_primary_database()` - Switch active writable database
 - `create_entity()` - Create entities in current primary database
 - `create_relationship()` - Create relationships between entities
@@ -115,11 +143,13 @@ CREATE REL TABLE RELATED_TO (
 - `get_graph_summary()` - Get database statistics
 
 ### MCP Resources
+
 - `kuzu://databases/list` - Discover available databases with metadata
 
 ## Development Patterns
 
 ### Database Access Pattern
+
 For write operations, always use `db_manager.get_connection()` to get the current writable database connection:
 
 ```python
@@ -133,6 +163,7 @@ if database != current_primary:
 ```
 
 ### Embedding Generation
+
 The server supports both MLX (Apple Silicon) and Sentence Transformers:
 
 ```python
@@ -144,6 +175,7 @@ embedding = generate_embedding(app_ctx.embedding_model, app_ctx.tokenizer, text)
 ```
 
 ### Error Handling Pattern
+
 All tools return structured error responses:
 
 ```python
@@ -158,6 +190,7 @@ return {
 ## Testing Strategy
 
 ### Test Database Setup
+
 Use separate test databases to avoid conflicts:
 
 ```python
@@ -170,6 +203,7 @@ if os.path.exists(test_db_path):
 ```
 
 ### Test Coverage Areas
+
 1. Database switching functionality
 2. Write isolation between databases
 3. Entity and relationship operations
@@ -180,12 +214,14 @@ if os.path.exists(test_db_path):
 ## Configuration
 
 ### Development Environment
+
 - Python 3.11+ required
 - Use `uv` package manager for dependency management
 - KuzuDB 0.11.2+ for graph database functionality
 - MLX embeddings for Apple Silicon acceleration
 
 ### MCP Client Configuration Example
+
 ```json
 {
   "mcpServers": {

@@ -36,7 +36,8 @@ async def test_server():
 
         # Test basic query execution
         try:
-            result = app_ctx.conn.execute("MATCH (e:Entity) RETURN COUNT(e)")
+            conn = app_ctx.db_manager.get_connection()
+            result = conn.execute("MATCH (e:Entity) RETURN COUNT(e)")
             count = result.get_next()[0]
             print(
                 f"✓ Database query successful - found {count} entities", file=sys.stderr
